@@ -1,7 +1,0 @@
-# Minimal requirements for basic functionality
-streamlit
-langchain
-openai
-chromadb
-python-dotenv
-requests
