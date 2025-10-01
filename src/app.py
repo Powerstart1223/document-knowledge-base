@@ -7,13 +7,29 @@ import sys
 # Add src directory to path for imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from document_processor import DocumentProcessor
-from rag_pipeline import RAGPipeline
-from config import Config
-from netdocuments_sync import NetDocumentsSync
-from netdocuments_integration import NetDocumentsAPI
-from document_drafter import DocumentDrafter
-from document_exporter import DocumentExporter
+try:
+    from document_processor import DocumentProcessor
+    from rag_pipeline import RAGPipeline
+    from config import Config
+    CORE_IMPORTS_SUCCESS = True
+except ImportError as e:
+    st.error(f"Core import error: {e}")
+    CORE_IMPORTS_SUCCESS = False
+
+# Optional imports - gracefully handle failures
+try:
+    from netdocuments_sync import NetDocumentsSync
+    from netdocuments_integration import NetDocumentsAPI
+    NETDOCS_AVAILABLE = True
+except ImportError:
+    NETDOCS_AVAILABLE = False
+
+try:
+    from document_drafter import DocumentDrafter
+    from document_exporter import DocumentExporter
+    DRAFTING_AVAILABLE = True
+except ImportError:
+    DRAFTING_AVAILABLE = False
 
 # Configure Streamlit page
 st.set_page_config(
@@ -62,6 +78,12 @@ if "document_drafter" not in st.session_state:
 def main():
     st.title("📚 Document Knowledge Base")
     st.markdown("Upload documents and ask questions about their content using AI")
+
+    # Check if core imports succeeded
+    if not CORE_IMPORTS_SUCCESS:
+        st.error("❌ Core system components failed to load. Please check the deployment logs.")
+        st.info("This usually means some required packages are missing. The deployment should retry automatically.")
+        return
 
     # Check if system is properly initialized
     if not st.session_state.get("initialized", False):

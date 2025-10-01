@@ -1,12 +1,7 @@
 streamlit
-langchain
-langchain-community
-langchain-openai
+openai
 chromadb
 python-dotenv
+requests
 pypdf2
 python-docx
-sentence-transformers
-openai
-tiktoken
-requests
