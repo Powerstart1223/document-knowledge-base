@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  document-knowledge-base:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - USE_LOCAL_MODEL=${USE_LOCAL_MODEL:-false}
+      - NETDOCUMENTS_ENABLED=${NETDOCUMENTS_ENABLED:-false}
+      - NETDOCUMENTS_CLIENT_ID=${NETDOCUMENTS_CLIENT_ID}
+      - NETDOCUMENTS_CLIENT_SECRET=${NETDOCUMENTS_CLIENT_SECRET}
+    volumes:
+      # Persist data across container restarts
+      - ./vectordb:/app/vectordb
+      - ./uploads:/app/uploads
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

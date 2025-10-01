@@ -1,0 +1,14 @@
+# Render.com deployment configuration
+services:
+  - type: web
+    name: document-knowledge-base
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "streamlit run src/app.py --server.port=$PORT --server.address=0.0.0.0"
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: USE_LOCAL_MODEL
+        value: "false"
+      - key: NETDOCUMENTS_ENABLED
+        value: "false"

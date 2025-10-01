@@ -1,0 +1,17 @@
+langchain==0.1.4
+langchain-community==0.0.20
+langchain-openai==0.0.6
+chromadb==0.4.22
+streamlit==1.31.0
+python-dotenv==1.0.1
+pypdf2==3.0.1
+python-docx==1.1.0
+sentence-transformers==2.2.2
+openai==1.12.0
+tiktoken==0.5.2
+requests==2.31.0
+
+# Optional packages for document export
+# Uncomment and install for additional export formats:
+# python-docx==0.8.11  # For DOCX export (already included above)
+# reportlab==4.0.4     # For PDF export
