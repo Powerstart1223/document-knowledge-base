@@ -55,18 +55,21 @@ if "messages" not in st.session_state:
 if "uploaded_files" not in st.session_state:
     st.session_state.uploaded_files = []
 
-# Initialize NetDocuments integration if enabled
-if "netdocuments_sync" not in st.session_state and Config.NETDOCUMENTS_ENABLED:
+# Initialize NetDocuments integration if enabled and available
+if CORE_IMPORTS_SUCCESS and NETDOCS_AVAILABLE and "netdocuments_sync" not in st.session_state:
     try:
-        st.session_state.netdocuments_api = NetDocumentsAPI()
-        st.session_state.netdocuments_sync = NetDocumentsSync(st.session_state.rag_pipeline)
-        st.session_state.netdocuments_initialized = True
+        if Config.NETDOCUMENTS_ENABLED:
+            st.session_state.netdocuments_api = NetDocumentsAPI()
+            st.session_state.netdocuments_sync = NetDocumentsSync(st.session_state.rag_pipeline)
+            st.session_state.netdocuments_initialized = True
+        else:
+            st.session_state.netdocuments_initialized = False
     except Exception as e:
         st.session_state.netdocuments_initialized = False
         st.session_state.netdocuments_error = str(e)
 
-# Initialize document drafting
-if "document_drafter" not in st.session_state:
+# Initialize document drafting if available
+if CORE_IMPORTS_SUCCESS and DRAFTING_AVAILABLE and "document_drafter" not in st.session_state:
     try:
         st.session_state.document_drafter = DocumentDrafter(st.session_state.rag_pipeline)
         st.session_state.document_exporter = DocumentExporter()
@@ -102,7 +105,11 @@ def main():
     # Sidebar for document management
     with st.sidebar:
         # Create tabs for different document sources
-        tab1, tab2 = st.tabs(["📁 Local Files", "☁️ NetDocuments"])
+        if NETDOCS_AVAILABLE:
+            tab1, tab2 = st.tabs(["📁 Local Files", "☁️ NetDocuments"])
+        else:
+            tab1 = st.container()
+            st.info("💡 NetDocuments integration not available in this deployment")
 
         with tab1:
             st.header("📁 Local Document Upload")
@@ -119,8 +126,9 @@ def main():
                 if st.button("📤 Process Documents", type="primary"):
                     process_uploaded_files(uploaded_files)
 
-        with tab2:
-            render_netdocuments_tab()
+        if NETDOCS_AVAILABLE:
+            with tab2:
+                render_netdocuments_tab()
 
         st.divider()
 
@@ -159,7 +167,11 @@ def main():
         st.session_state.retrieval_k = retrieval_k
 
     # Main content area - create tabs for different functionalities
-    main_tab1, main_tab2 = st.tabs(["💬 Q&A Chat", "✍️ Document Drafting"])
+    if DRAFTING_AVAILABLE:
+        main_tab1, main_tab2 = st.tabs(["💬 Q&A Chat", "✍️ Document Drafting"])
+    else:
+        main_tab1 = st.container()
+        st.info("💡 Document drafting not available in this deployment")
 
     with main_tab1:
         # Q&A Chat functionality
@@ -244,9 +256,10 @@ def main():
                 else:
                     st.info("No results found. Try uploading some documents first!")
 
-    with main_tab2:
-        # Document Drafting functionality
-        render_document_drafting_tab()
+    if DRAFTING_AVAILABLE:
+        with main_tab2:
+            # Document Drafting functionality
+            render_document_drafting_tab()
 
 def process_uploaded_files(uploaded_files: List):
     """Process uploaded files and add them to the knowledge base"""
