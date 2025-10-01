@@ -1,0 +1,2 @@
+# System packages needed for ChromaDB and other dependencies
+build-essential

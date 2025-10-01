@@ -1,3 +1,4 @@
+# Streamlit Cloud optimized requirements
 streamlit
 langchain
 langchain-community
