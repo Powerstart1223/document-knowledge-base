@@ -39,10 +39,19 @@ except Exception as e:
 def extract_text_from_file(uploaded_file):
     """Extract text from uploaded file"""
     try:
-        if uploaded_file.type == "text/plain":
+        name = uploaded_file.name.lower()
+        if name.endswith(".txt"):
             return str(uploaded_file.read(), "utf-8")
+        elif name.endswith(".pdf"):
+            import PyPDF2
+            reader = PyPDF2.PdfReader(uploaded_file)
+            return "\n".join(page.extract_text() or "" for page in reader.pages)
+        elif name.endswith(".docx"):
+            import docx
+            doc = docx.Document(uploaded_file)
+            return "\n".join(p.text for p in doc.paragraphs)
         else:
-            return "Only text files are supported in this simplified version. Please upload a .txt file."
+            return "Unsupported file type. Please upload a .txt, .pdf, or .docx file."
     except Exception as e:
         return f"Error reading file: {str(e)}"
 
@@ -84,10 +93,10 @@ def main():
 
         # File upload
         uploaded_files = st.file_uploader(
-            "Upload Text Documents",
-            type=["txt"],
+            "Upload Documents",
+            type=["txt", "pdf", "docx"],
             accept_multiple_files=True,
-            help="Upload .txt files to get started"
+            help="Upload .txt, .pdf, or .docx files to get started"
         )
 
         if uploaded_files:
@@ -112,7 +121,7 @@ def main():
         # Instructions
         st.subheader("📋 How to Use")
         st.markdown("""
-        1. **Upload** .txt files using the uploader above
+        1. **Upload** .txt, .pdf, or .docx files using the uploader above
         2. **Process** them by clicking the button
         3. **Ask questions** in the chat below
         4. **Get AI answers** based on your documents
