@@ -38,6 +38,7 @@ ENV/
 
 # Data directories (will be recreated on deployment)
 vectordb/
+chroma_db/
 uploads/*
 !uploads/.gitkeep
 
