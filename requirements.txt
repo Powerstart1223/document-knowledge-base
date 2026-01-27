@@ -1,6 +1,8 @@
 streamlit
-openai
+openai>=1.0.0
 PyPDF2
 python-docx
 chromadb
 sentence-transformers
+requests
+python-dotenv
