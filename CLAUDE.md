@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Corporate Law Document Generator v2.0 — a Python RAG (Retrieval-Augmented Generation) web application built with Streamlit. Multi-user system with authentication where users can upload legal documents, generate AI-powered legal drafts, and chat with their documents using RAG. Features per-user data isolation, role-based access control, and modern professional UI. Supports both OpenAI (cloud) and Ollama (local) LLM backends.
+Corporate Law Document Generator — a Python RAG (Retrieval-Augmented Generation) web application built with Streamlit. Multi-user system with authentication where users can upload legal documents, generate AI-powered legal drafts, and chat with their documents using RAG. Features per-user data isolation, role-based access control, modern professional UI, and first-run onboarding. Supports both OpenAI (cloud) and Ollama (local) LLM backends.
 
-### Major v2.0 Updates
+### Key Features
 - **Multi-user authentication** with bcrypt password hashing, login/registration, session management
+- **First-run onboarding wizard** that guides users through API key setup on first login
 - **Per-user data isolation** via separate ChromaDB collections per user
 - **Role-based access** with admin and user roles, admin panel for user management
-- **Modern UX** with professional corporate theme, card layouts, improved styling
+- **Modern, user-friendly UX** with professional corporate theme, helpful empty states, clear error messages
 - **Enhanced security** with password validation, session management, per-user namespaced data
 
 ## Commands

@@ -647,10 +647,15 @@ def get_custom_css() -> str:
     @media (max-width: 768px) {
         .app-header {
             padding: 1.5rem 1rem;
+            margin: -1rem -1rem 1.5rem -1rem;
         }
 
         .app-header h1 {
             font-size: 1.5rem;
+        }
+
+        .app-header .subtitle {
+            font-size: 0.85rem;
         }
 
         .stChatMessage[data-testid="user"],
@@ -660,8 +665,60 @@ def get_custom_css() -> str:
         }
 
         .auth-container {
-            margin: 2rem 1rem;
-            padding: 2rem 1.5rem;
+            margin: 1rem 0.5rem;
+            padding: 1.5rem 1rem;
+        }
+
+        .card {
+            padding: 1rem;
+            margin: 0.75rem 0;
+        }
+
+        .card-header {
+            font-size: 1rem;
+        }
+
+        .sidebar-header {
+            padding: 1rem;
+            margin: -1rem -0.5rem 1rem -0.5rem;
+        }
+
+        /* Make form inputs more touch-friendly */
+        .stTextInput > div > div > input,
+        .stTextArea > div > div > textarea,
+        .stSelectbox > div > div > select {
+            font-size: 16px; /* Prevents iOS zoom */
+            padding: 0.85rem;
+        }
+
+        /* Stack columns on mobile */
+        .stColumns {
+            flex-direction: column;
+        }
+
+        /* Better button sizing */
+        .stButton > button {
+            padding: 0.75rem 1rem;
+            font-size: 1rem;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .app-header h1 {
+            font-size: 1.25rem;
+        }
+
+        .user-badge {
+            font-size: 0.75rem;
+            padding: 0.4rem 0.75rem;
+        }
+
+        h2 {
+            font-size: 1.4rem;
+        }
+
+        h3 {
+            font-size: 1.1rem;
         }
     }
 
@@ -759,7 +816,7 @@ def render_footer():
 
     st.markdown("""
     <div class="app-footer">
-        <div class="version">Corporate Law Document Generator v2.0</div>
+        <div style="color: var(--text-secondary); font-weight: 500;">Corporate Law Document Generator</div>
         <div class="mt-1">Powered by AI • Built with Streamlit</div>
         <div class="mt-1 text-muted">
             For attorney use only • All generated documents require legal review

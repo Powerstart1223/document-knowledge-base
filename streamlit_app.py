@@ -1,7 +1,5 @@
 """
-Corporate Law Document Generator — Streamlit Application v2.0
-
-MAJOR UPDATE: Multi-user authentication system with modern UX
+Corporate Law Document Generator — Streamlit Application
 
 Features:
 - User authentication (login/registration)
@@ -25,7 +23,7 @@ from chromadb.utils import embedding_functions
 
 from llm_backend import LLMBackend
 from document_generator import DocumentGenerator, DOCUMENT_TYPES
-from api_clients import SECEdgarClient, LegalDatabaseClient
+from api_clients import SECEdgarClient
 
 # Authentication imports
 from auth import AuthManager, init_session_state, require_auth, get_user_collection_name
@@ -127,9 +125,9 @@ _DEFAULTS = {
     "llm_base_url": get_config_value("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
     "openai_api_key": get_config_value("OPENAI_API_KEY", ""),
     "sec_user_agent": get_config_value("SEC_EDGAR_USER_AGENT", ""),
-    "legal_db_api_key": get_config_value("LEGAL_DB_API_KEY", ""),
     "generated_text": "",
     "generated_title": "",
+    "onboarding_complete": False,
 }
 
 for key, val in _DEFAULTS.items():
@@ -189,10 +187,6 @@ def get_llm() -> LLMBackend:
 
 def get_sec_client() -> SECEdgarClient:
     return SECEdgarClient(user_agent=st.session_state.sec_user_agent)
-
-
-def get_legal_db_client() -> LegalDatabaseClient:
-    return LegalDatabaseClient(api_key=st.session_state.legal_db_api_key)
 
 
 # ======================================================================
@@ -370,18 +364,20 @@ def render_sidebar():
     # Document upload section
     st.markdown("""
     <div class="card-header">
-        📄 Document Upload
+        📄 Upload Documents
     </div>
     """, unsafe_allow_html=True)
 
+    st.caption("Upload documents to build your knowledge base")
+
     doc_type_options = list(DOCUMENT_TYPES.keys()) + ["reference"]
     selected_type = st.selectbox(
-        "Document type tag",
+        "Document category",
         options=doc_type_options,
         format_func=lambda k: (
             DOCUMENT_TYPES[k]["label"] if k in DOCUMENT_TYPES else "Reference / Other"
         ),
-        help="Tag uploaded files so the generator can retrieve matching style examples.",
+        help="Categorize your documents for better AI-powered retrieval and generation",
     )
 
     uploaded_files = st.file_uploader(
@@ -477,6 +473,161 @@ def render_sidebar():
 
 
 # ======================================================================
+# ONBOARDING WIZARD
+# ======================================================================
+
+def render_onboarding_wizard():
+    """Render the first-run onboarding wizard for API key setup."""
+    st.markdown("""
+    <div style="max-width: 700px; margin: 2rem auto;">
+        <div class="card fade-in">
+            <div style="text-align: center; margin-bottom: 2rem;">
+                <div style="font-size: 4rem; margin-bottom: 1rem;">🎉</div>
+                <h1 style="margin-bottom: 0.5rem;">Welcome to Your Document Generator!</h1>
+                <p style="color: var(--text-secondary); font-size: 1.1rem;">
+                    Let's get you set up in just a minute
+                </p>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1, 3, 1])
+
+    with col2:
+        st.markdown("""
+        <div class="card fade-in">
+            <h3 style="margin-top: 0;">📋 What This App Does</h3>
+            <ul style="line-height: 2; color: var(--text-secondary);">
+                <li><strong>Upload Documents:</strong> Add your legal documents to build a knowledge base</li>
+                <li><strong>Ask Questions:</strong> Chat with your documents using AI-powered search</li>
+                <li><strong>Generate Documents:</strong> Create contracts, memos, briefs, and filings</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("""
+        <div class="card fade-in">
+            <h3 style="margin-top: 0;">🔑 Setup Your AI Provider</h3>
+            <p style="color: var(--text-secondary);">
+                This app needs an AI language model to function. Choose your preferred option:
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        provider_choice = st.radio(
+            "Select your AI provider:",
+            options=["openai", "ollama"],
+            format_func=lambda x: "OpenAI (Recommended for cloud)" if x == "openai" else "Ollama (Local only)",
+            index=0,
+            key="onboarding_provider"
+        )
+
+        if provider_choice == "openai":
+            st.markdown("""
+            <div class="info-card">
+                <strong>OpenAI Setup:</strong><br>
+                1. Visit <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a><br>
+                2. Sign up or log in<br>
+                3. Create a new API key<br>
+                4. Copy and paste it below
+            </div>
+            """, unsafe_allow_html=True)
+
+            api_key = st.text_input(
+                "Enter your OpenAI API Key:",
+                type="password",
+                placeholder="sk-proj-...",
+                help="Your API key should start with 'sk-'",
+                key="onboarding_api_key"
+            )
+
+            if api_key:
+                if api_key.startswith("sk-") and len(api_key) > 20:
+                    st.markdown("""
+                    <div class="success-card">
+                        ✅ API key format looks valid!
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown("""
+                    <div class="warning-card">
+                        ⚠️ API key format may be invalid (should start with 'sk-')
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                if st.button("💾 Save & Continue", type="primary", use_container_width=True, disabled=not api_key):
+                    st.session_state.openai_api_key = api_key
+                    st.session_state.llm_provider = "openai"
+                    st.session_state.llm_model = "gpt-4o-mini"
+                    st.session_state.onboarding_complete = True
+                    st.toast("✅ OpenAI configured successfully!", icon="✅")
+                    st.rerun()
+
+            with col_btn2:
+                if st.button("Skip for Now", use_container_width=True):
+                    st.session_state.onboarding_complete = True
+                    st.rerun()
+
+        else:  # Ollama
+            st.markdown("""
+            <div class="info-card">
+                <strong>Ollama Setup:</strong><br>
+                1. Download from <a href="https://ollama.com" target="_blank">ollama.com</a><br>
+                2. Install and run Ollama on your computer<br>
+                3. Pull a model: <code>ollama pull llama3.1:8b</code><br>
+                4. Ollama should be running at http://localhost:11434
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Check if Ollama is available
+            try:
+                import requests
+                r = requests.get("http://localhost:11434/api/tags", timeout=2)
+                if r.status_code == 200:
+                    st.markdown("""
+                    <div class="success-card">
+                        ✅ Ollama detected and running!
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    col_btn1, col_btn2 = st.columns(2)
+                    with col_btn1:
+                        if st.button("💾 Use Ollama", type="primary", use_container_width=True):
+                            st.session_state.llm_provider = "ollama"
+                            st.session_state.llm_model = "llama3.1:8b"
+                            st.session_state.onboarding_complete = True
+                            st.toast("✅ Ollama configured successfully!", icon="✅")
+                            st.rerun()
+                    with col_btn2:
+                        if st.button("Skip for Now", use_container_width=True):
+                            st.session_state.onboarding_complete = True
+                            st.rerun()
+                else:
+                    st.markdown("""
+                    <div class="warning-card">
+                        ⚠️ Ollama not detected. Please install and start Ollama first.
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    if st.button("Skip for Now", use_container_width=True):
+                        st.session_state.onboarding_complete = True
+                        st.rerun()
+            except Exception:
+                st.markdown("""
+                <div class="warning-card">
+                    ⚠️ Ollama not detected. Please install and start Ollama first.
+                </div>
+                """, unsafe_allow_html=True)
+
+                if st.button("Skip for Now", use_container_width=True):
+                    st.session_state.onboarding_complete = True
+                    st.rerun()
+
+
+# ======================================================================
 # TAB 1 — Chat Q&A
 # ======================================================================
 
@@ -484,21 +635,60 @@ def render_chat_tab():
     """Render the chat Q&A interface."""
     st.markdown("""
     <div class="card-header">
-        💬 Chat Q&A - Ask Questions About Your Documents
+        💬 Chat with Your Documents
     </div>
     """, unsafe_allow_html=True)
 
-    st.caption("Ask questions about your uploaded documents. Answers are generated by the configured LLM with RAG.")
-
     collection = get_collection()
     if collection.count() == 0:
+        # Better empty state with onboarding
         st.markdown("""
-        <div class="info-card">
-            📄 <strong>No documents yet!</strong><br>
-            Upload and process documents in the sidebar to start chatting.
+        <div style="max-width: 600px; margin: 3rem auto; text-align: center;">
+            <div style="font-size: 5rem; margin-bottom: 1.5rem; opacity: 0.6;">📚</div>
+            <h3 style="color: var(--text-primary); margin-bottom: 1rem;">
+                No Documents Yet
+            </h3>
+            <p style="color: var(--text-secondary); font-size: 1.1rem; margin-bottom: 2rem;">
+                Upload legal documents in the sidebar to start asking questions about them.
+            </p>
         </div>
         """, unsafe_allow_html=True)
+
+        # Quick guide
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("""
+            <div class="card">
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">1️⃣</div>
+                <h4 style="text-align: center; margin-bottom: 0.5rem;">Upload</h4>
+                <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
+                    Add PDF, DOCX, or TXT files using the sidebar
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        with col2:
+            st.markdown("""
+            <div class="card">
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">2️⃣</div>
+                <h4 style="text-align: center; margin-bottom: 0.5rem;">Process</h4>
+                <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
+                    Click "Process Documents" to index them
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        with col3:
+            st.markdown("""
+            <div class="card">
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">3️⃣</div>
+                <h4 style="text-align: center; margin-bottom: 0.5rem;">Ask</h4>
+                <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
+                    Ask questions and get AI-powered answers
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
         return
+
+    st.caption("Ask questions about your uploaded documents. The AI will search your knowledge base and provide answers with sources.")
 
     # Chat history
     for msg in st.session_state.messages:
@@ -537,25 +727,32 @@ def render_generate_tab():
     """Render the document generation interface."""
     st.markdown("""
     <div class="card-header">
-        📝 Generate Document - Create Professional Legal Drafts
+        📝 Generate Legal Documents
     </div>
     """, unsafe_allow_html=True)
-
-    st.caption(
-        "Select a document type, fill in the parameters, and generate a professional draft. "
-        "All generated documents are drafts for attorney review."
-    )
 
     # Check LLM availability
     llm = get_llm()
     if not llm.is_available():
         st.markdown("""
-        <div class="warning-card">
-            ⚠️ <strong>LLM Not Configured</strong><br>
-            Please configure your LLM provider in the Settings tab before generating documents.
+        <div class="error-card">
+            <strong>⚠️ AI Provider Not Configured</strong><br><br>
+            To generate documents, you need to configure an AI provider.<br><br>
+            <strong>Quick Fix:</strong><br>
+            1. Go to the <strong>Settings</strong> tab above<br>
+            2. Choose either <strong>OpenAI</strong> (cloud) or <strong>Ollama</strong> (local)<br>
+            3. Enter your API key or configure Ollama<br>
+            4. Come back here to start generating documents
         </div>
         """, unsafe_allow_html=True)
         return
+
+    st.markdown("""
+    <div class="info-card" style="margin-bottom: 1.5rem;">
+        💡 <strong>How it works:</strong> Select a document type, fill in the details, and let AI draft a professional document for you.
+        All documents are drafts for attorney review.
+    </div>
+    """, unsafe_allow_html=True)
 
     # Document type selector
     doc_type = st.selectbox(
@@ -573,35 +770,55 @@ def render_generate_tab():
     # Dynamic form
     params = {}
     with st.form("doc_gen_form"):
-        st.markdown("### Document Parameters")
+        st.markdown("### 📋 Document Details")
+        st.caption("Fill in the information below. The AI will use these details to draft your document.")
 
         for field in doc_def["fields"]:
             key = field["key"]
             label = field["label"]
             ftype = field.get("type", "text")
             placeholder = field.get("placeholder", "")
+            help_text = field.get("help", "")
 
             if ftype == "date":
-                params[key] = st.date_input(label, value=date.today(), key=f"gen_{key}")
+                params[key] = st.date_input(
+                    label,
+                    value=date.today(),
+                    key=f"gen_{key}",
+                    help=help_text if help_text else None
+                )
             elif ftype == "textarea":
                 params[key] = st.text_area(
-                    label, placeholder=placeholder, key=f"gen_{key}", height=120
+                    label,
+                    placeholder=placeholder,
+                    key=f"gen_{key}",
+                    height=120,
+                    help=help_text if help_text else "Provide detailed information here"
                 )
             else:
                 params[key] = st.text_input(
-                    label, placeholder=placeholder, key=f"gen_{key}"
+                    label,
+                    placeholder=placeholder,
+                    key=f"gen_{key}",
+                    help=help_text if help_text else None
                 )
 
         st.divider()
-        st.markdown("### Optional Data Sources")
+        st.markdown("### 🔍 Optional: Enhance with External Data")
+        st.caption("Pull additional context from external databases (optional)")
 
         use_sec = st.checkbox(
-            "📊 Pull SEC EDGAR data",
-            help="Fetch relevant SEC filings for context",
+            "📊 Include SEC EDGAR data",
+            help="Fetch relevant public company filings from SEC EDGAR database",
         )
 
         st.divider()
-        submitted = st.form_submit_button("✨ Generate Document", type="primary", use_container_width=True)
+        submitted = st.form_submit_button(
+            "✨ Generate Document",
+            type="primary",
+            use_container_width=True,
+            help="This may take 30-60 seconds depending on the document complexity"
+        )
 
     if submitted:
         llm = get_llm()
@@ -698,61 +915,73 @@ def render_settings_tab():
     with settings_tab1:
         st.markdown("""
         <div class="card-header">
-            🤖 LLM Provider Configuration
+            🤖 AI Language Model
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("""
+        <div class="info-card">
+            The AI language model powers document generation and Q&A. Choose your preferred provider.
         </div>
         """, unsafe_allow_html=True)
 
         provider = st.radio(
-            "Provider",
+            "Select AI Provider",
             options=["ollama", "openai"],
-            format_func=lambda p: "Ollama (local only)" if p == "ollama" else "OpenAI (cloud-compatible)",
+            format_func=lambda p: "🏠 Ollama (Free, runs locally)" if p == "ollama" else "☁️ OpenAI (Cloud-based, paid API)",
             index=0 if st.session_state.llm_provider == "ollama" else 1,
             key="settings_provider",
-            horizontal=True,
+            horizontal=False,
         )
 
         if provider == "ollama" and is_streamlit_cloud():
             st.markdown("""
             <div class="warning-card">
-                ⚠️ <strong>Ollama Not Available on Cloud</strong><br>
-                Ollama is not available on Streamlit Cloud. Please use OpenAI provider instead.
+                ⚠️ <strong>Ollama requires local installation</strong><br>
+                Ollama is not available on Streamlit Cloud. Please use OpenAI provider for cloud deployments.
             </div>
             """, unsafe_allow_html=True)
 
         if provider == "ollama":
+            st.markdown("#### Ollama Configuration")
             base_url = st.text_input(
-                "Ollama base URL",
+                "Ollama API URL",
                 value=st.session_state.llm_base_url,
                 key="settings_base_url",
+                help="Default: http://localhost:11434/v1"
             )
             tmp_llm = LLMBackend(provider="ollama", base_url=base_url)
             models = tmp_llm.list_models()
             if models:
                 model = st.selectbox(
-                    "Model",
+                    "Select Model",
                     options=models,
                     index=models.index(st.session_state.llm_model)
                     if st.session_state.llm_model in models
                     else 0,
                     key="settings_model_select",
+                    help="Choose from your installed Ollama models"
                 )
+                st.success(f"✅ Connected to Ollama • {len(models)} model(s) available")
             else:
                 model = st.text_input(
                     "Model name",
                     value=st.session_state.llm_model,
                     key="settings_model_text",
+                    placeholder="llama3.1:8b"
                 )
-                st.warning("Could not connect to Ollama to list models.")
+                st.error("❌ Could not connect to Ollama. Make sure it's running.")
+                st.caption("Start Ollama: `ollama serve` • Install models: `ollama pull llama3.1:8b`")
         else:
-            st.markdown(
-                "Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)"
-            )
+            st.markdown("#### OpenAI Configuration")
+            st.caption("Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)")
             api_key = st.text_input(
                 "OpenAI API Key",
-                value=st.session_state.openai_api_key if st.session_state.openai_api_key != "your-api-key-here" else "",
+                value=st.session_state.openai_api_key if st.session_state.openai_api_key not in ["", "your-api-key-here"] else "",
                 type="password",
                 key="settings_openai_key",
                 help="Your OpenAI API key (starts with sk-)",
+                placeholder="sk-proj-..."
             )
             model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"]
             current_model = st.session_state.llm_model if st.session_state.llm_provider == "openai" else "gpt-4o-mini"
@@ -761,32 +990,25 @@ def render_settings_tab():
                 options=model_options,
                 index=model_options.index(current_model) if current_model in model_options else 0,
                 key="settings_openai_model",
-                help="gpt-4o-mini is recommended for cost-effectiveness",
+                help="gpt-4o-mini recommended for best cost/performance",
             )
             base_url = "https://api.openai.com/v1"
 
             if api_key:
                 if api_key.startswith("sk-") and len(api_key) > 20:
-                    st.markdown("""
-                    <div class="success-card">
-                        ✅ API key format looks valid
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.success("✅ API key format looks valid")
                 else:
-                    st.markdown("""
-                    <div class="warning-card">
-                        ⚠️ API key format may be invalid (should start with 'sk-')
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.warning("⚠️ API key format may be invalid (should start with 'sk-')")
 
-        if st.button("💾 Save LLM Settings", type="primary"):
+        if st.button("💾 Save Settings", type="primary", use_container_width=True):
             st.session_state.llm_provider = provider
             st.session_state.llm_model = model
             st.session_state.llm_base_url = base_url
             if provider == "openai":
                 st.session_state.openai_api_key = api_key
-            st.toast("✅ LLM settings saved!", icon="✅")
-            st.success("LLM settings saved.")
+            st.toast("✅ Settings saved successfully!", icon="✅")
+            st.success("AI provider settings saved successfully.")
+            st.rerun()
 
     # Profile Settings
     with settings_tab2:
@@ -800,59 +1022,29 @@ def render_settings_tab():
         </div>
         """, unsafe_allow_html=True)
 
-        # OpenAI API Key (quick access)
-        st.subheader("🔑 OpenAI API Key")
-        st.caption("Required when using OpenAI as LLM provider. Get your key from [OpenAI Platform](https://platform.openai.com/api-keys).")
-        openai_key = st.text_input(
-            "API Key",
-            value=st.session_state.openai_api_key if st.session_state.openai_api_key not in ["", "your-api-key-here"] else "",
-            type="password",
-            key="settings_integrations_openai_key",
-            placeholder="sk-proj-...",
-        )
-        if st.button("💾 Save OpenAI Key", key="save_openai_key_integrations"):
-            st.session_state.openai_api_key = openai_key
-            if st.session_state.llm_provider == "openai":
-                st.toast("✅ OpenAI API key saved and active!", icon="✅")
-                st.success("OpenAI API key saved. It's now active since your provider is set to OpenAI.")
-            else:
-                st.toast("✅ OpenAI API key saved!", icon="✅")
-                st.success("OpenAI API key saved. Switch to OpenAI provider in LLM settings to use it.")
-
-        st.divider()
+        st.markdown("""
+        <div class="info-card">
+            Configure external data sources to enhance document generation with real-world data.
+        </div>
+        """, unsafe_allow_html=True)
 
         # SEC EDGAR
-        st.subheader("📊 SEC EDGAR")
+        st.markdown("### 📊 SEC EDGAR")
+        st.caption(
+            "The SEC EDGAR database provides free access to company filings. "
+            "Useful for corporate filings and contracts."
+        )
         sec_ua = st.text_input(
-            "User-Agent (name + email)",
+            "User-Agent (Your Name + Email)",
             value=st.session_state.sec_user_agent,
-            placeholder="YourName your@email.com",
-            help="SEC EDGAR requires a User-Agent header with a contact name and email.",
+            placeholder="John Doe john.doe@lawfirm.com",
+            help="SEC requires a User-Agent header with your name and email for API access.",
             key="settings_sec_ua",
         )
-        if st.button("💾 Save SEC EDGAR Settings"):
+        if st.button("💾 Save SEC EDGAR Settings", use_container_width=True):
             st.session_state.sec_user_agent = sec_ua
             st.toast("✅ SEC EDGAR settings saved!", icon="✅")
-            st.success("SEC EDGAR settings saved.")
-
-        st.divider()
-
-        # Westlaw / LexisNexis
-        st.subheader("⚖️ Westlaw / LexisNexis (Stub)")
-        st.caption(
-            "These services require commercial API subscriptions. "
-            "Enter your API key when available."
-        )
-        legal_key = st.text_input(
-            "API Key",
-            value=st.session_state.legal_db_api_key,
-            type="password",
-            key="settings_legal_key",
-        )
-        if st.button("💾 Save Legal DB Key"):
-            st.session_state.legal_db_api_key = legal_key
-            st.toast("✅ Legal database API key saved!", icon="✅")
-            st.success("Legal database API key saved.")
+            st.success("SEC EDGAR settings saved successfully.")
 
     # Admin Panel or Account Info
     with settings_tab4:
@@ -883,33 +1075,55 @@ def main():
             render_login_page(auth_manager)
         return
 
-    # User is authenticated - show main app
+    # User is authenticated - check if onboarding needed
     current_user = st.session_state.current_user
+
+    # Show onboarding wizard on first login if LLM not configured
+    if not st.session_state.get("onboarding_complete", False):
+        llm = get_llm()
+        if not llm.is_available():
+            render_onboarding_wizard()
+            return
+        else:
+            # LLM is already configured, skip onboarding
+            st.session_state.onboarding_complete = True
 
     # Render header
     subtitle_provider = st.session_state.llm_provider.title()
     render_header(
         title="Corporate Law Document Generator",
-        subtitle=f"RAG-powered document generation with AI-assisted legal drafting • {subtitle_provider}",
+        subtitle=f"AI-powered legal document generation and knowledge base",
         user_info=current_user.to_dict()
     )
 
-    # Check LLM availability and show warning if not configured
+    # Check LLM availability and show clear instructions if not configured
     llm = get_llm()
     if not llm.is_available():
         if st.session_state.llm_provider == "ollama":
             st.markdown("""
             <div class="error-card">
-                ❌ <strong>Ollama Not Running</strong><br>
-                Ollama is not running or not available. Please start Ollama locally or switch to OpenAI in Settings.
+                <strong>⚠️ Ollama Not Running</strong><br><br>
+                The app is configured to use Ollama, but it's not running.<br><br>
+                <strong>To fix this:</strong><br>
+                1. Make sure Ollama is installed (<a href="https://ollama.com" target="_blank">ollama.com</a>)<br>
+                2. Open a terminal and run: <code>ollama serve</code><br>
+                3. Pull a model: <code>ollama pull llama3.1:8b</code><br>
+                4. Refresh this page<br><br>
+                <strong>Or:</strong> Switch to OpenAI in the <strong>Settings</strong> tab
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown("""
             <div class="error-card">
-                ❌ <strong>OpenAI API Key Missing</strong><br>
-                OpenAI API key is missing or invalid. Please add your API key in the Settings tab.
-                Get your key from <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a>
+                <strong>⚠️ OpenAI API Key Required</strong><br><br>
+                The app is configured to use OpenAI, but no valid API key was found.<br><br>
+                <strong>To fix this:</strong><br>
+                1. Go to <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a><br>
+                2. Sign up or log in<br>
+                3. Create a new API key<br>
+                4. Go to <strong>Settings</strong> → <strong>LLM Provider</strong> tab<br>
+                5. Enter your API key and click Save<br><br>
+                <strong>Or:</strong> Install and use Ollama locally (free)
             </div>
             """, unsafe_allow_html=True)
 

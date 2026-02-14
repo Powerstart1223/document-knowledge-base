@@ -14,9 +14,9 @@ def render_login_page(auth_manager: AuthManager):
     <div class="auth-container fade-in">
         <div class="auth-header">
             <div class="logo">⚖️</div>
-            <h1>Welcome Back</h1>
-            <p style="color: var(--text-secondary); margin: 0;">
-                Sign in to access the Corporate Law Document Generator
+            <h1>Corporate Law Document Generator</h1>
+            <p style="color: var(--text-secondary); margin: 0; font-size: 1.1rem;">
+                AI-powered legal drafting and document knowledge base
             </p>
         </div>
     </div>
@@ -26,6 +26,15 @@ def render_login_page(auth_manager: AuthManager):
         col1, col2, col3 = st.columns([1, 2, 1])
 
         with col2:
+            st.markdown("""
+            <div style="margin-bottom: 2rem;">
+                <h2 style="text-align: center; margin-bottom: 0.5rem;">Sign In</h2>
+                <p style="text-align: center; color: var(--text-secondary);">
+                    Enter your credentials to continue
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
             with st.form("login_form", clear_on_submit=False):
                 email = st.text_input(
                     "Email Address",
@@ -40,18 +49,11 @@ def render_login_page(auth_manager: AuthManager):
                     key="login_password"
                 )
 
-                col_btn1, col_btn2 = st.columns(2)
-                with col_btn1:
-                    submit = st.form_submit_button(
-                        "Sign In",
-                        type="primary",
-                        use_container_width=True
-                    )
-                with col_btn2:
-                    register_btn = st.form_submit_button(
-                        "Create Account",
-                        use_container_width=True
-                    )
+                submit = st.form_submit_button(
+                    "Sign In",
+                    type="primary",
+                    use_container_width=True
+                )
 
                 if submit:
                     if not email or not password:
@@ -61,32 +63,44 @@ def render_login_page(auth_manager: AuthManager):
                         if success:
                             st.session_state.authenticated = True
                             st.session_state.current_user = user
-                            st.success(f"Welcome back, {user.full_name}!")
+                            st.success(f"✅ Welcome back, {user.full_name}!")
                             st.rerun()
                         else:
                             st.error(message)
 
-                if register_btn:
-                    st.session_state.show_register = True
-                    st.rerun()
-
-            # Default credentials info
-            with st.expander("Default Admin Credentials"):
-                st.info("""
-                **First-time login:**
-                - Email: `admin@lawfirm.com`
-                - Password: `Admin123!`
-
-                Please change the password after first login.
-                """)
-
+            # Create account link
             st.markdown("""
-            <div class="auth-divider">
-                <span>Secure Authentication</span>
+            <div style="text-align: center; margin-top: 1.5rem;">
+                <p style="color: var(--text-secondary);">
+                    Don't have an account?
+                </p>
             </div>
             """, unsafe_allow_html=True)
 
-            st.caption("🔒 Your credentials are encrypted and stored securely")
+            if st.button("Create New Account", use_container_width=True):
+                st.session_state.show_register = True
+                st.rerun()
+
+            # Demo credentials - less prominent
+            with st.expander("🔐 Demo Credentials (First-time users)"):
+                st.markdown("""
+                <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; font-size: 0.9rem;">
+                    <strong>Default Admin Account:</strong><br>
+                    Email: <code>admin@lawfirm.com</code><br>
+                    Password: <code>Admin123!</code><br><br>
+                    <em style="color: var(--text-secondary); font-size: 0.85rem;">
+                    ⚠️ Change the password after first login for security.
+                    </em>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("""
+            <div style="text-align: center; margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
+                <p style="color: var(--text-light); font-size: 0.875rem;">
+                    🔒 Your credentials are encrypted and stored securely
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
 
 
 def render_registration_page(auth_manager: AuthManager):
@@ -95,9 +109,9 @@ def render_registration_page(auth_manager: AuthManager):
     <div class="auth-container fade-in">
         <div class="auth-header">
             <div class="logo">⚖️</div>
-            <h1>Create Account</h1>
-            <p style="color: var(--text-secondary); margin: 0;">
-                Join your team on the Corporate Law Document Generator
+            <h1>Corporate Law Document Generator</h1>
+            <p style="color: var(--text-secondary); margin: 0; font-size: 1.1rem;">
+                AI-powered legal drafting and document knowledge base
             </p>
         </div>
     </div>
@@ -107,6 +121,15 @@ def render_registration_page(auth_manager: AuthManager):
         col1, col2, col3 = st.columns([1, 2, 1])
 
         with col2:
+            st.markdown("""
+            <div style="margin-bottom: 2rem;">
+                <h2 style="text-align: center; margin-bottom: 0.5rem;">Create Your Account</h2>
+                <p style="text-align: center; color: var(--text-secondary);">
+                    Fill in your details to get started
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
             with st.form("registration_form", clear_on_submit=True):
                 full_name = st.text_input(
                     "Full Name",
