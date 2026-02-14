@@ -62,10 +62,12 @@ def is_streamlit_cloud() -> bool:
 
 
 def get_default_llm_provider() -> str:
-    """Auto-detect best LLM provider based on environment."""
+    """Auto-detect best LLM provider based on environment.
+    Defaults to Ollama for local deployments — all users share the host's Ollama instance.
+    """
     try:
         if "LLM_PROVIDER" in st.secrets:
-            return st.secrets.get("LLM_PROVIDER", "openai")
+            return st.secrets.get("LLM_PROVIDER", "ollama")
     except Exception:
         pass
 
@@ -76,15 +78,8 @@ def get_default_llm_provider() -> str:
     if is_streamlit_cloud():
         return "openai"
 
-    try:
-        import requests
-        r = requests.get("http://localhost:11434/api/tags", timeout=2)
-        if r.status_code == 200:
-            return "ollama"
-    except Exception:
-        pass
-
-    return "openai"
+    # Default to Ollama for local deployments
+    return "ollama"
 
 
 def get_config_value(key: str, default: str = "") -> str:
@@ -517,8 +512,8 @@ def render_onboarding_wizard():
 
         provider_choice = st.radio(
             "Select your AI provider:",
-            options=["openai", "ollama"],
-            format_func=lambda x: "OpenAI (Recommended for cloud)" if x == "openai" else "Ollama (Local only)",
+            options=["ollama", "openai"],
+            format_func=lambda x: "Ollama (Recommended — free, runs locally)" if x == "ollama" else "OpenAI (Cloud, requires API key)",
             index=0,
             key="onboarding_provider"
         )
@@ -1075,17 +1070,19 @@ def main():
             render_login_page(auth_manager)
         return
 
-    # User is authenticated - check if onboarding needed
+    # User is authenticated
     current_user = st.session_state.current_user
 
-    # Show onboarding wizard on first login if LLM not configured
+    # Auto-connect all users to the host's Ollama instance (no onboarding needed)
+    # Only show onboarding wizard if explicitly using OpenAI with no key set
     if not st.session_state.get("onboarding_complete", False):
-        llm = get_llm()
-        if not llm.is_available():
+        if st.session_state.llm_provider == "ollama":
+            # Ollama users connect directly to host — skip onboarding
+            st.session_state.onboarding_complete = True
+        elif st.session_state.llm_provider == "openai" and not st.session_state.openai_api_key:
             render_onboarding_wizard()
             return
         else:
-            # LLM is already configured, skip onboarding
             st.session_state.onboarding_complete = True
 
     # Render header
