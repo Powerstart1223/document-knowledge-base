@@ -4,7 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Corporate Law Document Generator — a Python RAG (Retrieval-Augmented Generation) web application built with Streamlit. Users upload legal documents tagged by type (contract, memo, brief, filing), then generate new documents using a local Llama model via Ollama. Also supports Chat Q&A over uploaded documents. Optional integrations with SEC EDGAR, NetDocuments, and Westlaw/LexisNexis (stub).
+Corporate Law Document Generator v2.0 — a Python RAG (Retrieval-Augmented Generation) web application built with Streamlit. Multi-user system with authentication where users can upload legal documents, generate AI-powered legal drafts, and chat with their documents using RAG. Features per-user data isolation, role-based access control, and modern professional UI. Supports both OpenAI (cloud) and Ollama (local) LLM backends.
+
+### Major v2.0 Updates
+- **Multi-user authentication** with bcrypt password hashing, login/registration, session management
+- **Per-user data isolation** via separate ChromaDB collections per user
+- **Role-based access** with admin and user roles, admin panel for user management
+- **Modern UX** with professional corporate theme, card layouts, improved styling
+- **Enhanced security** with password validation, session management, per-user namespaced data
 
 ## Commands
 
@@ -34,11 +41,12 @@ docker compose up --build
 ## Architecture
 
 ### Entry point
-`streamlit_app.py` — three-tab Streamlit app:
-- **Tab 1 — Chat Q&A**: RAG over uploaded documents using ChromaDB vector search + LLM.
-- **Tab 2 — Generate Document**: Select type (contract/memo/brief/filing), fill form, optionally pull SEC EDGAR / NetDocuments data, generate via LLM, preview, download as .docx.
-- **Tab 3 — Settings**: LLM provider (Ollama/OpenAI), model selector, SEC EDGAR config, NetDocuments OAuth flow, Westlaw/Lexis API key.
-- **Sidebar**: File upload with document-type tag selector, process button, database stats by type, connection status indicators.
+`streamlit_app.py` — authenticated multi-user Streamlit app with modern UI:
+- **Authentication**: Login/registration pages with secure bcrypt password hashing, session management
+- **Tab 1 — Chat Q&A**: RAG over user's uploaded documents using ChromaDB vector search + LLM
+- **Tab 2 — Generate Document**: Select type (contract/memo/brief/filing), fill form, optionally pull SEC EDGAR / NetDocuments data, generate via LLM, preview, download as .docx
+- **Tab 3 — Settings**: Sub-tabs for LLM provider config, user profile management, external integrations, and admin panel (admin users only)
+- **Sidebar**: User info badge, logout button, file upload with document-type tag selector, per-user database stats, connection status indicators
 
 ### Core modules
 - `llm_backend.py` — `LLMBackend` class. Uses `openai>=1.0` client pointed at Ollama's OpenAI-compatible endpoint (`http://localhost:11434/v1`). Supports Ollama and OpenAI with the same interface. Passes `num_ctx=8192` via `extra_body` for Ollama to extend the default 2048-token context.
@@ -48,19 +56,40 @@ docker compose up --build
   - `NetDocumentsClient`: OAuth 2.0 wrapper around NetDocuments REST API (wraps existing `netdocuments_direct_api.py` logic).
   - `LegalDatabaseClient`: Stub for Westlaw / LexisNexis (requires commercial API subscription).
 
+### Authentication & UI modules (NEW in v2.0)
+- `auth.py` — `AuthManager` class for user authentication:
+  - SQLite user database with bcrypt password hashing
+  - User registration with email/password validation
+  - Login with session management
+  - Admin functions: user activation, role changes, password updates
+  - `get_user_collection_name(user_id)` helper for per-user ChromaDB collections
+- `auth_ui.py` — Authentication UI components:
+  - `render_login_page()`: Login form with default admin credentials notice
+  - `render_registration_page()`: User registration with password strength validation
+  - `render_admin_panel()`: Admin user management interface (view users, toggle active status, change roles)
+  - `render_profile_settings()`: User profile and password change
+  - `render_auth_sidebar()`: User info badge and logout button in sidebar
+- `styles.py` — Modern UI styling and theme:
+  - `get_custom_css()`: Professional corporate theme (navy + gold), card layouts, modern typography
+  - `render_header()`: App header with branding and user badge
+  - `render_footer()`: App footer with version and disclaimer
+  - Helper functions for status badges, connection indicators, cards
+
 ### Legacy NetDocuments scripts (standalone, not imported by the app)
 - `netdocuments_direct_api.py` — Full OAuth 2.0 client. Kept for reference.
 - `simple_netdocs_client.py` — Simplified token-based client. Kept for reference.
 
 ### Data flow
-1. User uploads documents via sidebar, selects a document type tag (contract/memo/brief/filing/reference).
-2. Text extracted (PDF, DOCX, TXT) → chunked → stored in ChromaDB with `document_type` metadata.
-3. **Chat Q&A**: query → top-5 chunks from ChromaDB → context + question → LLM → answer with sources.
-4. **Document generation**: select type → fill form → retrieve style examples (ChromaDB, filtered by type) → optionally fetch SEC EDGAR / NetDocuments reference data → build prompt → LLM generates document → preview + download as .docx.
+1. **Authentication**: User logs in (or registers) → session created with `current_user` in session state
+2. User uploads documents via sidebar, selects a document type tag (contract/memo/brief/filing/reference)
+3. Text extracted (PDF, DOCX, TXT) → chunked → stored in **per-user ChromaDB collection** (`user_{user_id}_documents`) with `document_type` and `user_id` metadata
+4. **Chat Q&A**: query → top-5 chunks from user's collection → context + question → LLM → answer with sources
+5. **Document generation**: select type → fill form → retrieve style examples (from user's collection, filtered by type) → optionally fetch SEC EDGAR / NetDocuments reference data → build prompt → LLM generates document → preview + download as .docx
 
 ### Storage
-- `chroma_db/` — ChromaDB persistent vector database (gitignored)
-- `uploads/` — user-uploaded files (gitignored)
+- `users.db` — SQLite database with user accounts (email, password_hash, role, etc.) — **gitignored**
+- `chroma_db/` — ChromaDB persistent vector database with per-user collections — **gitignored**
+- `uploads/` — user-uploaded files (gitignored, not used in v2.0 — files processed directly to vectors)
 
 ## Environment Variables
 

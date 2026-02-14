@@ -42,6 +42,10 @@ chroma_db/
 uploads/*
 !uploads/.gitkeep
 
+# User database (contains user accounts and passwords)
+users.db
+*.db
+
 # Temporary files
 *.tmp
 *.log

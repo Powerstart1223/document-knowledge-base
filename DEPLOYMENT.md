@@ -1,6 +1,6 @@
-# 🌐 Deployment Guide — Corporate Law Document Generator
+# 🌐 Deployment Guide — Corporate Law Document Generator v2.0
 
-This guide covers deployment to Streamlit Cloud and other hosting platforms.
+This guide covers deploying the Corporate Law Document Generator with the new multi-user authentication system and modern UX to Streamlit Cloud.
 
 ## 🚀 Quick Start: Streamlit Cloud (Recommended)
 
@@ -68,14 +68,40 @@ LEGAL_DB_API_KEY = ""
 4. Click "Save"
 5. Your app will automatically restart with the new secrets
 
-### Step 4: Verify Deployment
+### Step 4: First Login
 
-1. Your app is now live at `https://YOUR_APP_NAME.streamlit.app`
-2. Test the following:
+**⚠️ IMPORTANT: Default Admin Credentials**
+
+On first run, the application automatically creates a default administrator account:
+- **Email:** `admin@lawfirm.com`
+- **Password:** `Admin123!`
+
+**🔐 Security Note:** Change this password immediately after first login!
+
+1. Navigate to your deployed app: `https://YOUR_APP_NAME.streamlit.app`
+2. You'll see the login screen
+3. Login with the default admin credentials above
+4. Go to Settings → Profile → Change Password
+5. Set a strong, unique password
+
+### Step 5: Create Additional Users
+
+As an administrator, you can:
+1. Have team members register their own accounts (they'll be created as regular users)
+2. In Settings → Admin panel, you can:
+   - View all registered users
+   - Activate/deactivate accounts
+   - Change user roles (promote users to admin)
+   - Monitor user activity
+
+### Step 6: Verify Deployment
+
+Test the following features:
    - Upload a document (PDF, DOCX, or TXT) in the sidebar
    - Process the document
    - Ask a question in the "Chat Q&A" tab
    - Generate a document in the "Generate Document" tab
+   - Each user sees only their own documents (data isolation)
 
 ### Troubleshooting
 
@@ -216,19 +242,53 @@ NETDOCUMENTS_CLIENT_SECRET=your_client_secret
 
 ## 🔐 Security Considerations
 
+### Authentication & User Management:
+
+**New in v2.0:** Multi-user authentication system with:
+- Bcrypt password hashing (never stores plaintext passwords)
+- Session-based authentication
+- Role-based access control (admin/user)
+- Per-user data isolation (separate ChromaDB collections)
+- Admin panel for user management
+
 ### Production Checklist:
+- [ ] **Change default admin password immediately**
 - [ ] Never commit `.env` files or secrets
 - [ ] Use environment variables for all sensitive data
 - [ ] Enable HTTPS (handled automatically by most platforms)
 - [ ] Set up proper firewall rules (for VPS deployments)
 - [ ] Regular security updates
 - [ ] Monitor logs for suspicious activity
+- [ ] Review user accounts regularly via admin panel
+- [ ] Deactivate unused accounts
+- [ ] Implement password rotation policy
 
 ### Data Privacy:
 - [ ] Document storage is local to your deployment
+- [ ] Per-user ChromaDB collections prevent data leakage between users
 - [ ] OpenAI API calls follow their data usage policies
 - [ ] NetDocuments uses OAuth for secure access
-- [ ] Consider data residency requirements
+- [ ] User database (`users.db`) contains hashed passwords only
+- [ ] Consider GDPR/compliance requirements for document storage
+
+### Important Notes for Streamlit Cloud Free Tier:
+
+⚠️ **User Database Persistence:**
+- The SQLite user database (`users.db`) is **ephemeral** on free tier
+- Database resets when the app restarts/sleeps
+- Users will need to re-register after app restarts
+- Default admin account is auto-created on each restart
+
+**For Production with Persistent Users:**
+1. Upgrade to Streamlit Cloud paid tier with persistent storage
+2. Migrate to PostgreSQL or other cloud database
+3. Use external authentication service (Auth0, Firebase Auth)
+
+⚠️ **Document Collections:**
+- ChromaDB collections are also ephemeral on free tier
+- Users need to re-upload documents after restarts
+- First load downloads ML models (2-3 minutes)
+- For persistence: use paid tier or external vector database
 
 ## 📊 Monitoring & Maintenance
 

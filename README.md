@@ -1,6 +1,24 @@
-# Corporate Law Document Generator
+# Corporate Law Document Generator v2.0
 
 A RAG-powered legal document generation system with AI-assisted drafting, built for corporate law firms and legal departments.
+
+## ✨ What's New in v2.0
+
+### 🔐 Multi-User Authentication
+- **User Registration & Login** - Secure authentication with bcrypt password hashing
+- **Role-Based Access** - Admin and user roles with different permissions
+- **Per-User Data Isolation** - Each user has their own document collection and chat history
+- **Admin Panel** - Manage users, activate/deactivate accounts, and assign roles
+- **Session Management** - Secure, persistent sessions with logout functionality
+
+### 🎨 Modern UX Overhaul
+- **Professional Theme** - Clean, corporate design with navy and gold color scheme
+- **Card-Based Layouts** - Modern, organized interface with smooth transitions
+- **Improved Chat UI** - Beautiful chat bubbles with better message styling
+- **Status Indicators** - Real-time connection status and loading states
+- **Responsive Design** - Works seamlessly on desktop, tablet, and mobile
+- **Enhanced Forms** - Better input styling with validation feedback
+- **Toast Notifications** - User-friendly success/error messages
 
 ## Features
 
@@ -33,7 +51,16 @@ A RAG-powered legal document generation system with AI-assisted drafting, built 
    streamlit run streamlit_app.py
    ```
 
-4. **Open your browser:** `http://localhost:8501`
+4. **Open your browser and login:**
+   - Navigate to `http://localhost:8501`
+   - Default admin credentials:
+     - Email: `admin@lawfirm.com`
+     - Password: `Admin123!`
+   - **⚠️ Change the password immediately after first login!**
+
+5. **Create additional users:**
+   - Click "Create Account" on login screen
+   - Or use Admin panel to manage users
 
 ## Quick Start — Streamlit Cloud Deployment
 

@@ -16,6 +16,9 @@ sentence-transformers>=2.2.0
 requests>=2.31.0
 python-dotenv>=1.0.0
 
+# Authentication
+bcrypt>=4.1.0
+
 # Required by ChromaDB (may need explicit versions for Streamlit Cloud)
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
