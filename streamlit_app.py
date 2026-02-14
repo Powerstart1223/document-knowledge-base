@@ -25,7 +25,7 @@ from chromadb.utils import embedding_functions
 
 from llm_backend import LLMBackend
 from document_generator import DocumentGenerator, DOCUMENT_TYPES
-from api_clients import SECEdgarClient, NetDocumentsClient, LegalDatabaseClient
+from api_clients import SECEdgarClient, LegalDatabaseClient
 
 # Authentication imports
 from auth import AuthManager, init_session_state, require_auth, get_user_collection_name
@@ -127,10 +127,6 @@ _DEFAULTS = {
     "llm_base_url": get_config_value("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
     "openai_api_key": get_config_value("OPENAI_API_KEY", ""),
     "sec_user_agent": get_config_value("SEC_EDGAR_USER_AGENT", ""),
-    "nd_client_id": get_config_value("NETDOCUMENTS_CLIENT_ID", ""),
-    "nd_client_secret": get_config_value("NETDOCUMENTS_CLIENT_SECRET", ""),
-    "nd_redirect_uri": get_config_value("NETDOCUMENTS_REDIRECT_URI", "https://localhost:3000/gettoken"),
-    "nd_access_token": None,
     "legal_db_api_key": get_config_value("LEGAL_DB_API_KEY", ""),
     "generated_text": "",
     "generated_title": "",
@@ -193,17 +189,6 @@ def get_llm() -> LLMBackend:
 
 def get_sec_client() -> SECEdgarClient:
     return SECEdgarClient(user_agent=st.session_state.sec_user_agent)
-
-
-def get_netdocs_client() -> NetDocumentsClient:
-    client = NetDocumentsClient(
-        client_id=st.session_state.nd_client_id,
-        client_secret=st.session_state.nd_client_secret,
-        redirect_uri=st.session_state.nd_redirect_uri,
-    )
-    if st.session_state.nd_access_token:
-        client.access_token = st.session_state.nd_access_token
-    return client
 
 
 def get_legal_db_client() -> LegalDatabaseClient:
@@ -489,20 +474,6 @@ def render_sidebar():
         </div>
         """, unsafe_allow_html=True)
 
-    nd = get_netdocs_client()
-    if nd.is_configured():
-        if nd.is_authenticated():
-            st.markdown("""
-            <div class="status-badge status-success">
-                NetDocuments: Connected
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div class="status-badge status-warning">
-                NetDocuments: Not authenticated
-            </div>
-            """, unsafe_allow_html=True)
 
 
 # ======================================================================
@@ -624,17 +595,10 @@ def render_generate_tab():
         st.divider()
         st.markdown("### Optional Data Sources")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            use_sec = st.checkbox(
-                "📊 Pull SEC EDGAR data",
-                help="Fetch relevant SEC filings for context",
-            )
-        with col2:
-            use_netdocs = st.checkbox(
-                "📁 Search NetDocuments",
-                help="Pull related documents from NetDocuments (requires auth)",
-            )
+        use_sec = st.checkbox(
+            "📊 Pull SEC EDGAR data",
+            help="Fetch relevant SEC filings for context",
+        )
 
         st.divider()
         submitted = st.form_submit_button("✨ Generate Document", type="primary", use_container_width=True)
@@ -650,7 +614,6 @@ def render_generate_tab():
         collection = get_collection()
         generator = DocumentGenerator(llm, collection)
         sec_client = get_sec_client() if use_sec else None
-        nd_client = get_netdocs_client() if use_netdocs else None
 
         with st.spinner("Generating document... this may take a moment."):
             try:
@@ -658,9 +621,7 @@ def render_generate_tab():
                     doc_type,
                     params,
                     sec_client=sec_client,
-                    netdocs_client=nd_client,
                     use_sec=use_sec,
-                    use_netdocs=use_netdocs,
                 )
                 st.session_state.generated_text = text
                 st.session_state.generated_title = (
@@ -839,6 +800,27 @@ def render_settings_tab():
         </div>
         """, unsafe_allow_html=True)
 
+        # OpenAI API Key (quick access)
+        st.subheader("🔑 OpenAI API Key")
+        st.caption("Required when using OpenAI as LLM provider. Get your key from [OpenAI Platform](https://platform.openai.com/api-keys).")
+        openai_key = st.text_input(
+            "API Key",
+            value=st.session_state.openai_api_key if st.session_state.openai_api_key not in ["", "your-api-key-here"] else "",
+            type="password",
+            key="settings_integrations_openai_key",
+            placeholder="sk-proj-...",
+        )
+        if st.button("💾 Save OpenAI Key", key="save_openai_key_integrations"):
+            st.session_state.openai_api_key = openai_key
+            if st.session_state.llm_provider == "openai":
+                st.toast("✅ OpenAI API key saved and active!", icon="✅")
+                st.success("OpenAI API key saved. It's now active since your provider is set to OpenAI.")
+            else:
+                st.toast("✅ OpenAI API key saved!", icon="✅")
+                st.success("OpenAI API key saved. Switch to OpenAI provider in LLM settings to use it.")
+
+        st.divider()
+
         # SEC EDGAR
         st.subheader("📊 SEC EDGAR")
         sec_ua = st.text_input(
@@ -852,52 +834,6 @@ def render_settings_tab():
             st.session_state.sec_user_agent = sec_ua
             st.toast("✅ SEC EDGAR settings saved!", icon="✅")
             st.success("SEC EDGAR settings saved.")
-
-        st.divider()
-
-        # NetDocuments
-        st.subheader("📁 NetDocuments")
-        nd_id = st.text_input(
-            "Client ID",
-            value=st.session_state.nd_client_id,
-            key="settings_nd_id",
-        )
-        nd_secret = st.text_input(
-            "Client Secret",
-            value=st.session_state.nd_client_secret,
-            type="password",
-            key="settings_nd_secret",
-        )
-        nd_redirect = st.text_input(
-            "Redirect URI",
-            value=st.session_state.nd_redirect_uri,
-            key="settings_nd_redirect",
-        )
-
-        if st.button("💾 Save NetDocuments Credentials"):
-            st.session_state.nd_client_id = nd_id
-            st.session_state.nd_client_secret = nd_secret
-            st.session_state.nd_redirect_uri = nd_redirect
-            st.toast("✅ NetDocuments credentials saved!", icon="✅")
-            st.success("NetDocuments credentials saved.")
-
-        if nd_id and nd_secret:
-            nd_client = NetDocumentsClient(nd_id, nd_secret, nd_redirect)
-            auth_url = nd_client.get_authorization_url()
-            st.markdown(f"[🔗 Authorize with NetDocuments]({auth_url})")
-
-            auth_code = st.text_input(
-                "Paste authorization code here",
-                key="settings_nd_auth_code",
-            )
-            if auth_code and st.button("🔐 Authenticate"):
-                try:
-                    nd_client.authenticate(auth_code)
-                    st.session_state.nd_access_token = nd_client.access_token
-                    st.toast("✅ NetDocuments authenticated!", icon="✅")
-                    st.success("NetDocuments authenticated successfully.")
-                except Exception as e:
-                    st.error(f"Authentication failed: {e}")
 
         st.divider()
 
