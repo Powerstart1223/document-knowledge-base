@@ -1,0 +1,22 @@
+# Fine-tuning dependencies (separate from main app)
+# Install with: pip install -r requirements-finetune.txt
+
+# PyTorch with CUDA 13.1 — installed separately via --index-url in setup_env.bat
+# torch
+
+# Unsloth — fast LoRA fine-tuning
+unsloth[colab-new]
+
+# Quantization
+bitsandbytes
+
+# Training
+trl
+peft
+accelerate
+transformers
+datasets
+
+# Text extraction (same as main app)
+PyPDF2
+python-docx

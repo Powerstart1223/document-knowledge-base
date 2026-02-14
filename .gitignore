@@ -58,3 +58,8 @@ Thumbs.db
 .netdocuments_config.json
 netdocuments_sync.log
 netdocuments_sync_state.json
+
+# Fine-tuning outputs
+finetune_venv/
+finetune_output/
+*.gguf
