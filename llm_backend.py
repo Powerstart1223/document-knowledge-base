@@ -88,12 +88,15 @@ class LLMBackend:
         try:
             if self.provider == "ollama":
                 r = requests.get(
-                    f"{self._ollama_native_url}/api/tags", timeout=5
+                    f"{self._ollama_native_url}/api/tags", timeout=3
                 )
                 return r.status_code == 200
             else:
-                # OpenAI — just verify the key isn't empty
-                return bool(self.api_key)
+                # OpenAI — verify the key isn't empty and looks valid
+                if not self.api_key or self.api_key == "ollama":
+                    return False
+                # Basic format check for OpenAI keys (starts with sk-)
+                return self.api_key.startswith("sk-") and len(self.api_key) > 20
         except Exception:
             return False
 

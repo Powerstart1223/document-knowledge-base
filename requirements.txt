@@ -1,8 +1,22 @@
-streamlit
+# Core framework
+streamlit>=1.32.0
+
+# LLM backends
 openai>=1.0.0
-PyPDF2
-python-docx
-chromadb
-sentence-transformers
-requests
-python-dotenv
+
+# Document processing
+PyPDF2>=3.0.0
+python-docx>=1.1.0
+
+# Vector database and embeddings
+chromadb>=0.4.22
+sentence-transformers>=2.2.0
+
+# Utilities
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Required by ChromaDB (may need explicit versions for Streamlit Cloud)
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+

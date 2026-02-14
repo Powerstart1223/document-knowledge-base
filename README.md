@@ -1,19 +1,21 @@
-# Document Knowledge Base
+# Corporate Law Document Generator
 
-A RAG (Retrieval-Augmented Generation) system that allows you to upload documents and query them using natural language.
+A RAG-powered legal document generation system with AI-assisted drafting, built for corporate law firms and legal departments.
 
 ## Features
 
-- Upload multiple document formats (PDF, DOCX, TXT)
-- **NetDocuments Integration** - Sync documents directly from your NetDocuments account
-- Semantic search through your documents
-- AI-powered question answering with source citations
-- **🆕 AI Document Drafting** - Generate new documents based on learned writing styles
-- **Style Learning** - Automatically analyze and learn from your existing documents
-- **Document Export** - Export to TXT, DOCX, and PDF formats
-- Easy-to-use web interface built with Streamlit
+- **Document Upload & Processing** - Support for PDF, DOCX, and TXT files
+- **Smart Chat Q&A** - Ask questions about your documents with RAG-powered answers
+- **AI Document Generation** - Generate contracts, legal memos, briefs, and corporate filings
+- **Style Learning** - Automatically learns from your existing documents to match your firm's writing style
+- **External Data Integration**:
+  - SEC EDGAR filings (free, public)
+  - NetDocuments OAuth integration
+  - Westlaw / LexisNexis support (stub)
+- **Cloud & Local Deployment** - Works with OpenAI (cloud) or Ollama (local)
+- **Professional Output** - Export to formatted .docx with proper legal document structure
 
-## Quick Start
+## Quick Start — Local Development
 
 1. **Install dependencies:**
    ```bash
@@ -23,80 +25,117 @@ A RAG (Retrieval-Augmented Generation) system that allows you to upload document
 2. **Set up environment:**
    ```bash
    cp .env.example .env
-   # Edit .env with your OpenAI API key (or set USE_LOCAL_MODEL=true)
+   # Edit .env with your OpenAI API key
    ```
 
 3. **Run the application:**
    ```bash
-   streamlit run src/app.py
+   streamlit run streamlit_app.py
    ```
 
-4. **Upload documents and start asking questions!**
+4. **Open your browser:** `http://localhost:8501`
 
-## NetDocuments Integration
+## Quick Start — Streamlit Cloud Deployment
 
-To integrate with your NetDocuments account:
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed instructions.
 
-1. **Enable NetDocuments integration:**
-   ```bash
-   python netdocuments_setup.py
-   ```
+**TL;DR:**
+1. Push code to GitHub
+2. Deploy to [share.streamlit.io](https://share.streamlit.io)
+3. Add your OpenAI API key in Streamlit Cloud Secrets
+4. Your app is live!
 
-2. **Or manually configure in .env:**
-   ```env
-   NETDOCUMENTS_ENABLED=true
-   NETDOCUMENTS_CLIENT_ID=your_client_id
-   NETDOCUMENTS_CLIENT_SECRET=your_client_secret
-   ```
+## Document Generation
 
-3. **Get API credentials:**
-   - Register an app in the NetDocuments Developer Portal
-   - Copy your Client ID and Client Secret
+Generate professional legal documents using AI:
 
-4. **Authenticate and sync:**
-   - Complete OAuth flow in the web interface
-   - Use "Sync Recent" or "Search & Sync" to import documents
+### Supported Document Types
 
-## AI Document Drafting
+1. **Contracts / Agreements**
+   - Bilateral contracts between parties
+   - Includes standard boilerplate clauses
+   - Customizable terms and conditions
 
-Generate professional documents that match the style of your existing documents:
+2. **Legal Memoranda**
+   - Internal legal analysis
+   - Standard memo format with Q&A structure
+   - Jurisdiction-specific research
 
-1. **Learn Writing Styles:**
-   - Go to the "Document Drafting" tab
-   - Click "Learn Styles from Knowledge Base"
-   - The AI analyzes your documents to understand writing patterns
+3. **Legal Briefs / Motions**
+   - Court filings with proper citation format
+   - Argument structure and legal standards
+   - Case caption and procedural requirements
 
-2. **Draft New Documents:**
-   - Describe what you want to create
-   - Choose document type (or let AI auto-detect)
-   - AI generates a document using learned styles and knowledge base context
+4. **Corporate Filings**
+   - Articles of incorporation
+   - Annual reports
+   - Certificate amendments
+   - Optional SEC EDGAR integration for reference data
 
-3. **Refine and Export:**
-   - Edit the generated document
-   - Get AI suggestions for improvements
-   - Export to TXT, DOCX, or PDF formats
+### How to Generate Documents
 
-### Document Types Supported:
-- **Legal Documents** - Contracts, agreements, legal briefs
-- **Business Documents** - Proposals, letters, reports
-- **Technical Documents** - Specifications, manuals, guides
-- **General Documents** - Any other document type
+1. **Upload Style Examples** (optional but recommended):
+   - Upload sample documents of each type in the sidebar
+   - Tag them with the correct document type
+   - The AI will learn your firm's writing style
+
+2. **Generate a Document**:
+   - Go to "Generate Document" tab
+   - Select document type
+   - Fill in the parameters (parties, dates, terms, etc.)
+   - Optionally enable SEC EDGAR or NetDocuments for reference data
+   - Click "Generate Document"
+
+3. **Review and Download**:
+   - Preview the generated draft
+   - Download as .docx with proper formatting
+   - All documents include disclaimer: "DRAFT — FOR ATTORNEY REVIEW ONLY"
+
+## External Integrations
+
+### SEC EDGAR (Free)
+- Full-text search of public filings
+- Company filing history by CIK
+- Automatic integration with corporate filings
+- No API key required (just provide User-Agent)
+
+### NetDocuments (Optional)
+- OAuth authentication
+- Search firm document repository
+- Pull related documents for context
+- Configure in Settings tab
+
+### Westlaw / LexisNexis (Stub)
+- API structure ready
+- Requires commercial API subscription
+- Contact Westlaw/Lexis for API access
 
 ## Project Structure
 
 ```
 document-knowledge-base/
-├── src/               # Main application code
-├── data/              # Sample documents
-├── uploads/           # User uploaded documents
-├── vectordb/          # ChromaDB storage
-├── requirements.txt   # Python dependencies
-└── .env              # Environment variables
+├── streamlit_app.py          # Main Streamlit application
+├── llm_backend.py            # LLM abstraction (Ollama/OpenAI)
+├── document_generator.py     # Document generation pipeline
+├── api_clients.py            # External API clients (SEC, NetDocuments, etc.)
+├── requirements.txt          # Python dependencies
+├── .env.example              # Environment variables template
+├── .streamlit/
+│   ├── config.toml           # Streamlit configuration
+│   └── secrets.toml.example  # Secrets template (for Streamlit Cloud)
+├── chroma_db/                # ChromaDB vector storage (created at runtime)
+├── uploads/                  # Uploaded documents (created at runtime)
+└── DEPLOYMENT.md             # Deployment guide
 ```
 
 ## How it Works
 
-1. **Document Processing**: Documents are split into chunks and converted to embeddings
-2. **Vector Storage**: Embeddings are stored in ChromaDB for fast similarity search
-3. **Query Processing**: User questions are matched against relevant document chunks
-4. **AI Generation**: LLM generates answers using the retrieved context with source citations
+1. **Document Processing**: Documents are chunked and embedded using sentence-transformers
+2. **Vector Storage**: ChromaDB stores embeddings with metadata (document type, source)
+3. **RAG Chat**: User questions retrieve relevant chunks, then LLM generates answers with citations
+4. **Document Generation**:
+   - Retrieves style examples from uploaded documents
+   - Optionally fetches reference data from SEC EDGAR or NetDocuments
+   - Builds structured prompts with user parameters
+   - Generates professional legal documents via LLM
+   - Exports to formatted .docx with proper styling

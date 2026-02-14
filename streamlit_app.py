@@ -24,6 +24,44 @@ from llm_backend import LLMBackend
 from document_generator import DocumentGenerator, DOCUMENT_TYPES
 from api_clients import SECEdgarClient, NetDocumentsClient, LegalDatabaseClient
 
+
+# ======================================================================
+# Environment detection and smart defaults
+# ======================================================================
+
+def is_streamlit_cloud() -> bool:
+    """Detect if running on Streamlit Cloud."""
+    return os.getenv("STREAMLIT_SHARING_MODE") is not None or \
+           os.getenv("STREAMLIT_RUNTIME_ENV") == "cloud"
+
+
+def get_default_llm_provider() -> str:
+    """Auto-detect best LLM provider based on environment."""
+    # Check secrets first (Streamlit Cloud pattern)
+    if "LLM_PROVIDER" in st.secrets:
+        return st.secrets.get("LLM_PROVIDER", "openai")
+
+    # Check environment variable
+    provider = os.getenv("LLM_PROVIDER", "").lower()
+    if provider in ["ollama", "openai"]:
+        return provider
+
+    # Auto-detect: use OpenAI on Streamlit Cloud, Ollama locally
+    if is_streamlit_cloud():
+        return "openai"
+
+    # Check if Ollama is available locally
+    try:
+        import requests
+        r = requests.get("http://localhost:11434/api/tags", timeout=2)
+        if r.status_code == 200:
+            return "ollama"
+    except Exception:
+        pass
+
+    # Default to OpenAI if Ollama not available
+    return "openai"
+
 # ======================================================================
 # Page config
 # ======================================================================
@@ -35,25 +73,48 @@ st.set_page_config(
 )
 
 # ======================================================================
-# Session state defaults
+# Session state defaults with smart environment detection
 # ======================================================================
+
+def get_config_value(key: str, default: str = "") -> str:
+    """Get config from Streamlit secrets, then env vars, then default."""
+    # Try Streamlit secrets first (for Streamlit Cloud)
+    try:
+        if key in st.secrets:
+            value = st.secrets[key]
+            # Return value only if it's not a placeholder
+            if value and value not in ["your-api-key-here", "your_openai_api_key_here"]:
+                return value
+    except Exception:
+        pass  # st.secrets might not be available in all environments
+    # Fall back to environment variable
+    return os.getenv(key, default)
+
+
+# Auto-detect provider and set smart defaults
+DEFAULT_PROVIDER = get_default_llm_provider()
+
 _DEFAULTS = {
     "messages": [],
     "processed_files": set(),
-    # LLM settings
-    "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),
-    "llm_model": os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
-    "llm_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
-    "openai_api_key": os.getenv("OPENAI_API_KEY", ""),
+    # LLM settings with auto-detection
+    "llm_provider": DEFAULT_PROVIDER,
+    "llm_model": (
+        get_config_value("OPENAI_MODEL", "gpt-4o-mini")
+        if DEFAULT_PROVIDER == "openai"
+        else get_config_value("OLLAMA_MODEL", "llama3.1:8b")
+    ),
+    "llm_base_url": get_config_value("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+    "openai_api_key": get_config_value("OPENAI_API_KEY", ""),
     # SEC EDGAR
-    "sec_user_agent": os.getenv("SEC_EDGAR_USER_AGENT", ""),
+    "sec_user_agent": get_config_value("SEC_EDGAR_USER_AGENT", ""),
     # NetDocuments
-    "nd_client_id": os.getenv("NETDOCUMENTS_CLIENT_ID", ""),
-    "nd_client_secret": os.getenv("NETDOCUMENTS_CLIENT_SECRET", ""),
-    "nd_redirect_uri": os.getenv("NETDOCUMENTS_REDIRECT_URI", "https://localhost:3000/gettoken"),
+    "nd_client_id": get_config_value("NETDOCUMENTS_CLIENT_ID", ""),
+    "nd_client_secret": get_config_value("NETDOCUMENTS_CLIENT_SECRET", ""),
+    "nd_redirect_uri": get_config_value("NETDOCUMENTS_REDIRECT_URI", "https://localhost:3000/gettoken"),
     "nd_access_token": None,
     # Westlaw / LexisNexis
-    "legal_db_api_key": os.getenv("LEGAL_DB_API_KEY", ""),
+    "legal_db_api_key": get_config_value("LEGAL_DB_API_KEY", ""),
     # Generated document state
     "generated_text": "",
     "generated_title": "",
@@ -421,6 +482,14 @@ def render_generate_tab():
         "All generated documents are drafts for attorney review."
     )
 
+    # Check LLM availability first
+    llm = get_llm()
+    if not llm.is_available():
+        st.warning(
+            "LLM is not configured. Please configure your LLM provider in the Settings tab before generating documents."
+        )
+        return
+
     # Document type selector
     doc_type = st.selectbox(
         "Document type",
@@ -531,17 +600,31 @@ def render_generate_tab():
 def render_settings_tab():
     st.header("Settings")
 
+    # Show environment info
+    if is_streamlit_cloud():
+        st.info(
+            "Running on Streamlit Cloud. "
+            "Use OpenAI provider (Ollama requires local installation). "
+            "Secrets should be configured in the Streamlit Cloud dashboard."
+        )
+
     # -- LLM Provider ---------------------------------------------------
     st.subheader("LLM Provider")
 
     provider = st.radio(
         "Provider",
         options=["ollama", "openai"],
-        format_func=lambda p: "Ollama (local)" if p == "ollama" else "OpenAI (cloud)",
+        format_func=lambda p: "Ollama (local only)" if p == "ollama" else "OpenAI (cloud-compatible)",
         index=0 if st.session_state.llm_provider == "ollama" else 1,
         key="settings_provider",
         horizontal=True,
     )
+
+    if provider == "ollama" and is_streamlit_cloud():
+        st.warning(
+            "Ollama is not available on Streamlit Cloud. "
+            "Please use OpenAI provider instead."
+        )
 
     if provider == "ollama":
         base_url = st.text_input(
@@ -569,18 +652,33 @@ def render_settings_tab():
             )
             st.warning("Could not connect to Ollama to list models.")
     else:
+        st.markdown(
+            "Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)"
+        )
         api_key = st.text_input(
             "OpenAI API Key",
-            value=st.session_state.openai_api_key,
+            value=st.session_state.openai_api_key if st.session_state.openai_api_key != "your-api-key-here" else "",
             type="password",
             key="settings_openai_key",
+            help="Your OpenAI API key (starts with sk-)",
         )
-        model = st.text_input(
-            "Model name",
-            value="gpt-4" if st.session_state.llm_provider != "openai" else st.session_state.llm_model,
+        model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"]
+        current_model = st.session_state.llm_model if st.session_state.llm_provider == "openai" else "gpt-4o-mini"
+        model = st.selectbox(
+            "Model",
+            options=model_options,
+            index=model_options.index(current_model) if current_model in model_options else 0,
             key="settings_openai_model",
+            help="gpt-4o-mini is recommended for cost-effectiveness",
         )
         base_url = "https://api.openai.com/v1"
+
+        # Show key validation status
+        if api_key:
+            if api_key.startswith("sk-") and len(api_key) > 20:
+                st.success("API key format looks valid")
+            else:
+                st.warning("API key format may be invalid (should start with 'sk-')")
 
     if st.button("Save LLM Settings"):
         st.session_state.llm_provider = provider
@@ -675,7 +773,27 @@ def render_settings_tab():
 
 def main():
     st.title("Corporate Law Document Generator")
-    st.caption("RAG-powered document generation with local Llama via Ollama")
+
+    # Dynamic subtitle based on LLM provider
+    if st.session_state.llm_provider == "ollama":
+        st.caption("RAG-powered document generation with local Llama via Ollama")
+    else:
+        st.caption("RAG-powered document generation with AI-assisted legal drafting")
+
+    # Check LLM availability and show warning if not configured
+    llm = get_llm()
+    if not llm.is_available():
+        if st.session_state.llm_provider == "ollama":
+            st.error(
+                "Ollama is not running or not available. "
+                "Please start Ollama locally or switch to OpenAI in Settings."
+            )
+        else:
+            st.error(
+                "OpenAI API key is missing or invalid. "
+                "Please add your API key in the Settings tab. "
+                "Get your key from https://platform.openai.com/api-keys"
+            )
 
     render_sidebar()
 

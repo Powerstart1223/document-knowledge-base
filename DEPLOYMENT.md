@@ -1,32 +1,98 @@
-# 🌐 Website Deployment Guide
+# 🌐 Deployment Guide — Corporate Law Document Generator
 
-This guide shows you how to deploy your Document Knowledge Base as a live website using different hosting platforms.
+This guide covers deployment to Streamlit Cloud and other hosting platforms.
 
-## 🚀 Quick Deployment Options
+## 🚀 Quick Start: Streamlit Cloud (Recommended)
 
-### Option 1: Streamlit Cloud (Recommended for Beginners)
-**🆓 Free | ⚡ Fastest Setup | 🔄 Auto-Deploy**
+**🆓 Free Tier Available | ⚡ 5-Minute Setup | 🔄 Auto-Deploy from Git**
 
-1. **Prepare Repository:**
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git push origin main
-   ```
+### Prerequisites
 
-2. **Deploy on Streamlit Cloud:**
-   - Go to [share.streamlit.io](https://share.streamlit.io)
-   - Connect your GitHub account
-   - Select your repository
-   - Set main file: `src/app.py`
+- GitHub account
+- OpenAI API key (get one at https://platform.openai.com/api-keys)
+- Git repository with your code
 
-3. **Configure Secrets:**
-   - In Streamlit Cloud dashboard → Secrets
-   - Copy content from `.streamlit/secrets.toml`
-   - Add your actual API keys
+### Step 1: Prepare Your Repository
 
-4. **Your site will be live at:** `https://your-app-name.streamlit.app`
+```bash
+# Initialize git if not already done
+git init
+
+# Add all files (secrets are excluded via .gitignore)
+git add .
+
+# Commit your code
+git commit -m "Initial commit for Streamlit Cloud deployment"
+
+# Push to GitHub
+git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
+git branch -M main
+git push -u origin main
+```
+
+### Step 2: Deploy to Streamlit Cloud
+
+1. Go to [share.streamlit.io](https://share.streamlit.io)
+2. Click "New app"
+3. Connect your GitHub account (if not already connected)
+4. Select your repository
+5. Set the main file path: `streamlit_app.py`
+6. Click "Deploy"
+
+### Step 3: Configure Secrets
+
+The app requires an OpenAI API key to function. Configure it in Streamlit Cloud:
+
+1. In your Streamlit Cloud dashboard, open your app
+2. Click the "Settings" menu (⋮) → "Secrets"
+3. Paste the following configuration (replace with your actual values):
+
+```toml
+# Required: LLM Configuration
+LLM_PROVIDER = "openai"
+OPENAI_API_KEY = "sk-proj-YOUR_ACTUAL_API_KEY_HERE"
+OPENAI_MODEL = "gpt-4o-mini"
+
+# Optional: SEC EDGAR (free, just provide your contact info)
+SEC_EDGAR_USER_AGENT = "YourName your@email.com"
+
+# Optional: NetDocuments OAuth
+NETDOCUMENTS_CLIENT_ID = ""
+NETDOCUMENTS_CLIENT_SECRET = ""
+NETDOCUMENTS_REDIRECT_URI = ""
+
+# Optional: Westlaw/LexisNexis
+LEGAL_DB_API_KEY = ""
+```
+
+4. Click "Save"
+5. Your app will automatically restart with the new secrets
+
+### Step 4: Verify Deployment
+
+1. Your app is now live at `https://YOUR_APP_NAME.streamlit.app`
+2. Test the following:
+   - Upload a document (PDF, DOCX, or TXT) in the sidebar
+   - Process the document
+   - Ask a question in the "Chat Q&A" tab
+   - Generate a document in the "Generate Document" tab
+
+### Troubleshooting
+
+**"LLM is not available" error:**
+- Check that your `OPENAI_API_KEY` is correctly set in Streamlit Cloud Secrets
+- Verify the API key is valid at https://platform.openai.com/api-keys
+- Make sure `LLM_PROVIDER = "openai"` (not "ollama")
+
+**Import errors:**
+- Check that all dependencies are in `requirements.txt`
+- Streamlit Cloud will show build logs if packages fail to install
+
+**App is slow on first load:**
+- ChromaDB and sentence-transformers download models on first run
+- This is normal and only happens once
+
+---
 
 ### Option 2: Docker + Any Cloud (Most Flexible)
 **🐳 Containerized | 🌍 Deploy Anywhere | 🔧 Full Control**
