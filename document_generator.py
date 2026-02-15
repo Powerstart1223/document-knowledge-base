@@ -139,6 +139,167 @@ class DocumentGenerator:
         self.llm = llm
         self.collection = chroma_collection
 
+    # -- Document Analysis (for Mimic workflow) --------------------------
+
+    def analyze_document(self, document_text: str) -> dict:
+        """
+        Analyze an uploaded document to extract structure, fields, and style.
+        Returns a dict with document_type, fields, structure, tone, etc.
+        """
+        analysis_prompt = """
+You are a legal document analysis expert. Analyze the provided document and extract the following information in JSON format:
+
+{
+    "document_type": "contract|memo|brief|filing|other",
+    "document_subtype": "specific type, e.g., Independent Contractor Agreement, Lease, NDA, etc.",
+    "structure": {
+        "sections": ["list of main section headings"],
+        "has_signature_block": true/false,
+        "has_exhibits": true/false
+    },
+    "key_fields": {
+        "field_name": "extracted value",
+        ...
+    },
+    "tone": "formal|semi-formal|technical",
+    "style_notes": "brief description of writing style and formatting patterns"
+}
+
+Extract all named parties, dates, amounts, terms, and other variable fields. For fields that appear to be templates or variables, extract the actual values if present.
+
+Document to analyze:
+
+"""
+
+        messages = [
+            {"role": "system", "content": "You are a legal document analysis expert. Always respond with valid JSON."},
+            {"role": "user", "content": analysis_prompt + document_text[:8000]}  # Truncate to fit context
+        ]
+
+        try:
+            response = self.llm.chat(messages, temperature=0.1, max_tokens=2048)
+            # Try to extract JSON from the response
+            import json
+            # Find JSON in the response (might be wrapped in markdown code blocks)
+            json_start = response.find('{')
+            json_end = response.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                json_str = response[json_start:json_end]
+                analysis = json.loads(json_str)
+                return analysis
+            else:
+                # Fallback if JSON parsing fails
+                return {
+                    "document_type": "contract",
+                    "document_subtype": "Unknown",
+                    "structure": {"sections": [], "has_signature_block": False, "has_exhibits": False},
+                    "key_fields": {},
+                    "tone": "formal",
+                    "style_notes": "Unable to parse analysis"
+                }
+        except Exception as e:
+            return {
+                "document_type": "contract",
+                "document_subtype": "Unknown",
+                "structure": {"sections": [], "has_signature_block": False, "has_exhibits": False},
+                "key_fields": {},
+                "tone": "formal",
+                "style_notes": f"Analysis error: {str(e)}"
+            }
+
+    def generate_from_template(
+        self,
+        reference_text: str,
+        analysis: dict,
+        user_edits: dict
+    ) -> str:
+        """
+        Generate a new document that mimics the reference document's style
+        but uses the user's edited field values.
+        """
+        system_prompt = f"""You are a legal document drafting assistant. Generate a new {analysis.get('document_subtype', 'document')} that:
+1. Mimics the EXACT structure and formatting of the reference document
+2. Uses the same tone and style: {analysis.get('tone', 'formal')}
+3. Maintains the same section headings and organization
+4. Replaces template values with the user's specified values
+
+Style notes: {analysis.get('style_notes', 'Professional legal document')}
+
+This is a draft for attorney review, not legal advice."""
+
+        # Build the user prompt with reference and edits
+        field_list = "\n".join([f"- {k}: {v}" for k, v in user_edits.items() if v])
+
+        user_prompt = f"""Reference document structure and style:
+
+{reference_text[:4000]}
+
+User's values for this new document:
+
+{field_list}
+
+Generate a complete {analysis.get('document_subtype', 'document')} following the exact structure and style of the reference document, but using the user's values."""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        return self.llm.chat(messages, temperature=0.2, max_tokens=4096)
+
+    # -- AI-Guided Workflow ----------------------------------------------
+
+    def get_required_fields_for_type(self, document_type: str) -> list[dict]:
+        """
+        Ask the LLM what fields are typically needed for a document type.
+        Returns a list of field definitions.
+        """
+        if document_type in DOCUMENT_TYPES:
+            # Use predefined fields for known types
+            return DOCUMENT_TYPES[document_type]["fields"]
+
+        # For unknown types, ask the LLM
+        prompt = f"""What fields/information are typically required to draft a {document_type}?
+
+Return a JSON array of field objects, each with:
+- "key": snake_case field identifier
+- "label": Human-readable field label
+- "type": "text" or "date" or "textarea"
+- "placeholder": Example value
+- "help": Brief explanation of what to enter
+
+Example:
+[
+    {{"key": "party_a", "label": "First Party Name", "type": "text", "placeholder": "John Doe", "help": "Full legal name"}},
+    {{"key": "effective_date", "label": "Effective Date", "type": "date", "placeholder": "", "help": "When the agreement takes effect"}}
+]
+
+Return only the JSON array, no other text."""
+
+        messages = [
+            {"role": "system", "content": "You are a legal document expert. Return only valid JSON."},
+            {"role": "user", "content": prompt}
+        ]
+
+        try:
+            response = self.llm.chat(messages, temperature=0.2, max_tokens=1500)
+            import json
+            # Extract JSON array
+            json_start = response.find('[')
+            json_end = response.rfind(']') + 1
+            if json_start >= 0 and json_end > json_start:
+                fields = json.loads(response[json_start:json_end])
+                return fields
+            else:
+                # Fallback
+                return [
+                    {"key": "details", "label": "Document Details", "type": "textarea", "placeholder": "Enter all relevant information"}
+                ]
+        except Exception:
+            return [
+                {"key": "details", "label": "Document Details", "type": "textarea", "placeholder": "Enter all relevant information"}
+            ]
+
     # -- Style examples from ChromaDB ------------------------------------
 
     def get_style_examples(

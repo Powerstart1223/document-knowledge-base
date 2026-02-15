@@ -715,37 +715,257 @@ def render_chat_tab():
 
 
 # ======================================================================
-# TAB 2 — Generate Document
+# TAB 2 — Generate Document - Workflow Functions
 # ======================================================================
 
-def render_generate_tab():
-    """Render the document generation interface."""
+def render_mimic_workflow():
+    """Workflow 1: Upload and mimic a reference document."""
     st.markdown("""
-    <div class="card-header">
-        📝 Generate Legal Documents
+    <div style="margin-bottom: 1rem;">
+        <h3 style="margin-bottom: 0.5rem;">Upload a Reference Document</h3>
+        <p style="color: var(--text-secondary);">
+            Upload a document you'd like to replicate. The AI will analyze its structure,
+            extract key fields, and let you modify values to create a new document in the same style.
+        </p>
     </div>
     """, unsafe_allow_html=True)
 
-    # Check LLM availability
-    llm = get_llm()
-    if not llm.is_available():
-        st.markdown("""
-        <div class="error-card">
-            <strong>⚠️ AI Provider Not Configured</strong><br><br>
-            To generate documents, you need to configure an AI provider.<br><br>
-            <strong>Quick Fix:</strong><br>
-            1. Go to the <strong>Settings</strong> tab above<br>
-            2. Choose either <strong>OpenAI</strong> (cloud) or <strong>Ollama</strong> (local)<br>
-            3. Enter your API key or configure Ollama<br>
-            4. Come back here to start generating documents
-        </div>
-        """, unsafe_allow_html=True)
-        return
+    # File upload
+    uploaded_ref = st.file_uploader(
+        "Upload reference document",
+        type=["pdf", "docx", "txt"],
+        key="mimic_upload",
+        help="Upload a document to use as a template"
+    )
 
+    if uploaded_ref:
+        # Extract text
+        with st.spinner("Reading document..."):
+            ref_text = extract_text_from_file(uploaded_ref)
+
+        if len(ref_text) < 100:
+            st.error("Document appears to be too short or unreadable. Please upload a valid document.")
+            return
+
+        st.success(f"✅ Loaded {len(ref_text)} characters from {uploaded_ref.name}")
+
+        # Analyze the document
+        if st.button("🔍 Analyze Document Structure", type="primary", use_container_width=True):
+            with st.spinner("Analyzing document structure and extracting fields..."):
+                llm = get_llm()
+                collection = get_collection()
+                generator = DocumentGenerator(llm, collection)
+                analysis = generator.analyze_document(ref_text)
+
+                # Store in session state
+                st.session_state.mimic_analysis = analysis
+                st.session_state.mimic_ref_text = ref_text
+                st.toast("✅ Analysis complete!", icon="✅")
+                st.rerun()
+
+        # Show analysis results and editable fields
+        if "mimic_analysis" in st.session_state:
+            analysis = st.session_state.mimic_analysis
+
+            st.divider()
+            st.markdown(f"""
+            <div class="success-card">
+                <strong>📄 Document Type:</strong> {analysis.get('document_subtype', 'Unknown')}<br>
+                <strong>🎨 Tone:</strong> {analysis.get('tone', 'formal')}<br>
+                <strong>📝 Style:</strong> {analysis.get('style_notes', 'Standard legal document')}
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("### ✏️ Edit Field Values")
+            st.caption("Modify the extracted values below. The AI will generate a new document with your changes.")
+
+            # Editable form for extracted fields
+            with st.form("mimic_edit_form"):
+                user_edits = {}
+                key_fields = analysis.get("key_fields", {})
+
+                if not key_fields:
+                    st.info("No specific fields were extracted. You can describe changes in the text area below.")
+                    user_edits["general_changes"] = st.text_area(
+                        "Describe the changes you want to make",
+                        placeholder="E.g., Change party names from X to Y, update date to...",
+                        height=150
+                    )
+                else:
+                    for field_name, field_value in key_fields.items():
+                        user_edits[field_name] = st.text_input(
+                            field_name.replace("_", " ").title(),
+                            value=str(field_value),
+                            key=f"mimic_{field_name}"
+                        )
+
+                st.divider()
+                submitted = st.form_submit_button(
+                    "✨ Generate Document",
+                    type="primary",
+                    use_container_width=True
+                )
+
+                if submitted:
+                    with st.spinner("Generating document in the style of your reference..."):
+                        llm = get_llm()
+                        collection = get_collection()
+                        generator = DocumentGenerator(llm, collection)
+
+                        try:
+                            text = generator.generate_from_template(
+                                st.session_state.mimic_ref_text,
+                                analysis,
+                                user_edits
+                            )
+                            st.session_state.generated_text = text
+                            st.session_state.generated_title = f"{analysis.get('document_subtype', 'Document')} (Mimicked)"
+                            st.toast("✅ Document generated!", icon="✅")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Generation failed: {e}")
+
+
+def render_guided_workflow():
+    """Workflow 2: AI-guided interactive builder."""
     st.markdown("""
-    <div class="info-card" style="margin-bottom: 1.5rem;">
-        💡 <strong>How it works:</strong> Select a document type, fill in the details, and let AI draft a professional document for you.
-        All documents are drafts for attorney review.
+    <div style="margin-bottom: 1rem;">
+        <h3 style="margin-bottom: 0.5rem;">AI-Guided Document Builder</h3>
+        <p style="color: var(--text-secondary);">
+            Select a document type and the AI will guide you through all the necessary information
+            with contextual questions.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Initialize session state for guided workflow
+    if "guided_step" not in st.session_state:
+        st.session_state.guided_step = 0
+        st.session_state.guided_answers = {}
+        st.session_state.guided_fields = []
+
+    # Step 0: Select document type
+    if st.session_state.guided_step == 0:
+        doc_type = st.selectbox(
+            "What type of document do you want to create?",
+            options=list(DOCUMENT_TYPES.keys()),
+            format_func=lambda k: DOCUMENT_TYPES[k]["label"],
+            key="guided_doc_type"
+        )
+
+        doc_def = DOCUMENT_TYPES[doc_type]
+        st.markdown(f"*{doc_def['description']}*")
+
+        if st.button("Start Building →", type="primary", use_container_width=True):
+            st.session_state.guided_step = 1
+            st.session_state.guided_doc_type = doc_type
+            st.session_state.guided_fields = doc_def["fields"]
+            st.session_state.guided_current_field = 0
+            st.rerun()
+
+    # Step 1+: Ask questions one by one
+    elif st.session_state.guided_step > 0:
+        fields = st.session_state.guided_fields
+        current_idx = st.session_state.guided_current_field
+        doc_type = st.session_state.guided_doc_type
+
+        if current_idx < len(fields):
+            # Show progress
+            progress = (current_idx) / len(fields)
+            st.progress(progress)
+            st.caption(f"Question {current_idx + 1} of {len(fields)}")
+
+            field = fields[current_idx]
+
+            st.markdown(f"### {field['label']}")
+            if field.get("help"):
+                st.caption(field["help"])
+
+            # Show the appropriate input type
+            if field.get("type") == "date":
+                answer = st.date_input(
+                    "Select date",
+                    value=date.today(),
+                    key=f"guided_q_{current_idx}",
+                    label_visibility="collapsed"
+                )
+            elif field.get("type") == "textarea":
+                answer = st.text_area(
+                    "Your answer",
+                    placeholder=field.get("placeholder", ""),
+                    height=150,
+                    key=f"guided_q_{current_idx}",
+                    label_visibility="collapsed"
+                )
+            else:
+                answer = st.text_input(
+                    "Your answer",
+                    placeholder=field.get("placeholder", ""),
+                    key=f"guided_q_{current_idx}",
+                    label_visibility="collapsed"
+                )
+
+            col1, col2 = st.columns([1, 1])
+
+            with col1:
+                if current_idx > 0:
+                    if st.button("← Previous", use_container_width=True):
+                        st.session_state.guided_current_field -= 1
+                        st.rerun()
+
+            with col2:
+                next_label = "Next →" if current_idx < len(fields) - 1 else "Generate Document ✨"
+                if st.button(next_label, type="primary", use_container_width=True):
+                    # Store answer
+                    st.session_state.guided_answers[field["key"]] = answer
+
+                    if current_idx < len(fields) - 1:
+                        # Move to next question
+                        st.session_state.guided_current_field += 1
+                        st.rerun()
+                    else:
+                        # All questions answered - generate document
+                        with st.spinner("Generating your document..."):
+                            llm = get_llm()
+                            collection = get_collection()
+                            generator = DocumentGenerator(llm, collection)
+
+                            try:
+                                text = generator.generate(
+                                    doc_type,
+                                    st.session_state.guided_answers,
+                                    use_sec=False,
+                                    use_netdocs=False
+                                )
+                                st.session_state.generated_text = text
+                                st.session_state.generated_title = f"{DOCUMENT_TYPES[doc_type]['label']} — Draft"
+
+                                # Reset guided workflow
+                                st.session_state.guided_step = 0
+                                st.session_state.guided_answers = {}
+                                st.session_state.guided_current_field = 0
+
+                                st.toast("✅ Document generated!", icon="✅")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Generation failed: {e}")
+
+            # Show summary of answers so far
+            if st.session_state.guided_answers:
+                with st.expander("📋 Review Your Answers"):
+                    for key, value in st.session_state.guided_answers.items():
+                        if value:
+                            st.caption(f"**{key.replace('_', ' ').title()}:** {value}")
+
+
+def render_quick_workflow():
+    """Workflow 3: Quick static form (original workflow)."""
+    st.markdown("""
+    <div style="margin-bottom: 1rem;">
+        <h3 style="margin-bottom: 0.5rem;">Quick Generate</h3>
+        <p style="color: var(--text-secondary);">
+            For users who know exactly what they need. Fill out the form and generate immediately.
+        </p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -754,7 +974,7 @@ def render_generate_tab():
         "Document type",
         options=list(DOCUMENT_TYPES.keys()),
         format_func=lambda k: DOCUMENT_TYPES[k]["label"],
-        key="gen_doc_type",
+        key="quick_doc_type",
     )
 
     doc_def = DOCUMENT_TYPES[doc_type]
@@ -764,7 +984,7 @@ def render_generate_tab():
 
     # Dynamic form
     params = {}
-    with st.form("doc_gen_form"):
+    with st.form("quick_gen_form"):
         st.markdown("### 📋 Document Details")
         st.caption("Fill in the information below. The AI will use these details to draft your document.")
 
@@ -779,14 +999,14 @@ def render_generate_tab():
                 params[key] = st.date_input(
                     label,
                     value=date.today(),
-                    key=f"gen_{key}",
+                    key=f"quick_{key}",
                     help=help_text if help_text else None
                 )
             elif ftype == "textarea":
                 params[key] = st.text_area(
                     label,
                     placeholder=placeholder,
-                    key=f"gen_{key}",
+                    key=f"quick_{key}",
                     height=120,
                     help=help_text if help_text else "Provide detailed information here"
                 )
@@ -794,7 +1014,7 @@ def render_generate_tab():
                 params[key] = st.text_input(
                     label,
                     placeholder=placeholder,
-                    key=f"gen_{key}",
+                    key=f"quick_{key}",
                     help=help_text if help_text else None
                 )
 
@@ -805,6 +1025,7 @@ def render_generate_tab():
         use_sec = st.checkbox(
             "📊 Include SEC EDGAR data",
             help="Fetch relevant public company filings from SEC EDGAR database",
+            key="quick_use_sec"
         )
 
         st.divider()
@@ -842,26 +1063,91 @@ def render_generate_tab():
                 st.toast("✅ Document generated successfully!", icon="✅")
             except Exception as e:
                 st.error(f"Generation failed: {e}")
-                return
 
-    # Preview & download
-    if st.session_state.generated_text:
+
+# ======================================================================
+# TAB 2 — Generate Document (Main Function)
+# ======================================================================
+
+def render_generate_tab():
+    """Render the document generation interface with three workflow options."""
+    st.markdown("""
+    <div class="card-header">
+        📝 Generate Legal Documents
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Check LLM availability
+    llm = get_llm()
+    if not llm.is_available():
+        st.markdown("""
+        <div class="error-card">
+            <strong>⚠️ AI Provider Not Configured</strong><br><br>
+            To generate documents, you need to configure an AI provider.<br><br>
+            <strong>Quick Fix:</strong><br>
+            1. Go to the <strong>Settings</strong> tab above<br>
+            2. Choose either <strong>OpenAI</strong> (cloud) or <strong>Ollama</strong> (local)<br>
+            3. Enter your API key or configure Ollama<br>
+            4. Come back here to start generating documents
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    # Workflow selection
+    st.markdown("""
+    <div class="info-card" style="margin-bottom: 1.5rem;">
+        💡 <strong>Choose your workflow:</strong> Select how you'd like to generate your document below.
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Three workflow options as tabs
+    workflow_tab1, workflow_tab2, workflow_tab3 = st.tabs([
+        "🎨 Mimic a Document",
+        "🤖 AI-Guided Builder",
+        "⚡ Quick Generate"
+    ])
+
+    with workflow_tab1:
+        render_mimic_workflow()
+
+    with workflow_tab2:
+        render_guided_workflow()
+
+    with workflow_tab3:
+        render_quick_workflow()
+
+    # Shared preview & download section (shown when any workflow generates a document)
+    if st.session_state.get("generated_text"):
         st.divider()
         st.markdown("""
         <div class="card-header">
-            📄 Preview & Download
+            📄 Preview & Edit
         </div>
         """, unsafe_allow_html=True)
 
-        st.text_area(
+        st.caption("Review and edit your generated document below before downloading.")
+
+        # Editable text area
+        edited_text = st.text_area(
             "Generated document",
             value=st.session_state.generated_text,
             height=500,
-            key="gen_preview",
+            key="preview_edit",
         )
 
-        col1, col2 = st.columns([3, 1])
+        # Update session state if user edits
+        if edited_text != st.session_state.generated_text:
+            st.session_state.generated_text = edited_text
+
+        col1, col2, col3 = st.columns([2, 1, 1])
+
         with col2:
+            if st.button("🔄 Reset", use_container_width=True, help="Clear the generated document"):
+                st.session_state.generated_text = ""
+                st.session_state.generated_title = ""
+                st.rerun()
+
+        with col3:
             docx_bytes = DocumentGenerator.text_to_docx(
                 st.session_state.generated_text,
                 st.session_state.generated_title,
@@ -871,7 +1157,7 @@ def render_generate_tab():
                 for c in st.session_state.generated_title
             ).strip()
             st.download_button(
-                label="⬇️ Download as .docx",
+                label="⬇️ Download .docx",
                 data=docx_bytes,
                 file_name=f"{safe_name}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
