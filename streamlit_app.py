@@ -40,6 +40,7 @@ from auth import AuthManager, init_session_state, require_auth, get_user_collect
 from auth_ui import (
     render_login_page,
     render_registration_page,
+    render_verification_page,
     render_admin_panel,
     render_profile_settings,
     render_auth_sidebar
@@ -946,7 +947,6 @@ def render_guided_workflow():
                                     doc_type,
                                     st.session_state.guided_answers,
                                     use_sec=False,
-                                    use_netdocs=False
                                 )
                                 st.session_state.generated_text = text
                                 st.session_state.generated_title = f"{DOCUMENT_TYPES[doc_type]['label']} — Draft"
@@ -2337,8 +2337,10 @@ def main():
 
     # Check authentication status
     if not require_auth(st.session_state):
-        # Show login or registration page
-        if st.session_state.get("show_register", False):
+        # Show verification, registration, or login page
+        if st.session_state.get("verify_email"):
+            render_verification_page(auth_manager)
+        elif st.session_state.get("show_register", False):
             render_registration_page(auth_manager)
         else:
             render_login_page(auth_manager)

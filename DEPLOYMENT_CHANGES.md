@@ -103,7 +103,6 @@ pydantic>=2.0.0
 - LLM provider configuration (OpenAI vs. Ollama)
 - OpenAI API key and model settings
 - SEC EDGAR User-Agent
-- NetDocuments OAuth credentials
 - Legal database API keys
 
 ### 2. `STREAMLIT_CLOUD_CHECKLIST.md`

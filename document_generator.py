@@ -6,7 +6,7 @@ Each document type is defined as a dict with:
 
 The pipeline:
   1. Retrieve style examples from ChromaDB (where document_type = type)
-  2. Optionally fetch reference data from SEC EDGAR / NetDocuments
+  2. Optionally fetch reference data from SEC EDGAR
   3. Build system + user prompts
   4. Call LLMBackend.generate_document()
   5. Convert result to .docx bytes
@@ -636,9 +636,8 @@ Return ONLY the JSON array, no other text."""
         document_type: str,
         params: dict,
         sec_client=None,
-        netdocs_client=None,
     ) -> str:
-        """Optionally pull reference data from SEC EDGAR or NetDocuments."""
+        """Optionally pull reference data from SEC EDGAR."""
         parts: list[str] = []
 
         # SEC EDGAR — useful for filings & contracts mentioning public companies
@@ -672,23 +671,6 @@ Return ONLY the JSON array, no other text."""
                             )
             except Exception as e:
                 parts.append(f"(SEC EDGAR lookup failed: {e})")
-
-        # NetDocuments — pull related docs
-        if (
-            netdocs_client
-            and netdocs_client.is_configured()
-            and netdocs_client.is_authenticated()
-        ):
-            try:
-                query = params.get("subject_matter", "") or params.get("re", "") or document_type
-                docs = netdocs_client.search_documents(query, max_results=3)
-                if docs:
-                    lines = [f"  - {d.get('name', 'Untitled')}" for d in docs]
-                    parts.append(
-                        "Related NetDocuments:\n" + "\n".join(lines)
-                    )
-            except Exception as e:
-                parts.append(f"(NetDocuments lookup failed: {e})")
 
         return "\n\n".join(parts)
 
@@ -746,9 +728,7 @@ Return ONLY the JSON array, no other text."""
         document_type: str,
         params: dict,
         sec_client=None,
-        netdocs_client=None,
         use_sec: bool = False,
-        use_netdocs: bool = False,
     ) -> str:
         """Run the full generation pipeline and return the document text."""
         # 1. Style examples
@@ -756,12 +736,11 @@ Return ONLY the JSON array, no other text."""
 
         # 2. Reference data
         reference_data = ""
-        if use_sec or use_netdocs:
+        if use_sec:
             reference_data = self.fetch_reference_data(
                 document_type,
                 params,
                 sec_client=sec_client if use_sec else None,
-                netdocs_client=netdocs_client if use_netdocs else None,
             )
 
         # 3. Build prompt

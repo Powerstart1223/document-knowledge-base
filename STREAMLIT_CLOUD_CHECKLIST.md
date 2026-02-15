@@ -70,11 +70,6 @@ OPENAI_MODEL = "gpt-4o-mini"
 # Optional: SEC EDGAR
 SEC_EDGAR_USER_AGENT = "YourName your@email.com"
 
-# Optional: NetDocuments
-NETDOCUMENTS_CLIENT_ID = ""
-NETDOCUMENTS_CLIENT_SECRET = ""
-NETDOCUMENTS_REDIRECT_URI = ""
-
 # Optional: Legal Databases
 LEGAL_DB_API_KEY = ""
 ```

@@ -21,7 +21,6 @@ This update addresses all bugs, implements a first-run onboarding wizard for Ope
 ### Code Quality
 - ✅ Removed all developer-facing version references (e.g., "v2.0")
 - ✅ Simplified codebase by removing non-functional stubs
-- ✅ All NetDocuments references preserved in standalone scripts (untouched as requested)
 
 ---
 
@@ -214,12 +213,8 @@ Or: Install and use Ollama locally (free)
 - `auth.py` - Authentication logic (working correctly)
 - `llm_backend.py` - LLM abstraction (working correctly)
 - `document_generator.py` - Document generation (working correctly)
-- `api_clients.py` - API clients (NetDocumentsClient preserved but unused)
+- `api_clients.py` - API clients (working correctly)
 - `requirements.txt` - No dependency changes needed
-
-### Standalone Scripts (Preserved)
-- `netdocuments_direct_api.py` - Untouched
-- `simple_netdocs_client.py` - Untouched
 
 ---
 

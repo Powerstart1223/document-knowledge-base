@@ -2,15 +2,12 @@
 External data-source clients for the Corporate Law Document Generator.
 
 - SECEdgarClient  — free, public SEC EDGAR full-text search API
-- NetDocumentsClient — wraps the existing NetDocuments OAuth API code
 - LegalDatabaseClient — stub for Westlaw / LexisNexis (requires commercial API)
 """
 
 import os
 import re
-import base64
 import requests
-from urllib.parse import urlencode
 
 
 # ======================================================================
@@ -125,103 +122,6 @@ class SECEdgarClient:
         text = re.sub(r"<[^>]+>", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
         return text
-
-
-# ======================================================================
-# NetDocuments (wraps existing netdocuments_direct_api.py)
-# ======================================================================
-
-
-class NetDocumentsClient:
-    """Facade around the existing NetDocumentsDirectAPI for Streamlit use."""
-
-    AUTH_URL = "https://vault.netvoyage.com/neWeb2/OAuth.aspx"
-    TOKEN_URL = "https://api.vault.netvoyage.com/v1/oauth/access_token"
-    DEFAULT_BASE = "https://api.vault.netvoyage.com"
-
-    def __init__(
-        self,
-        client_id: str = "",
-        client_secret: str = "",
-        redirect_uri: str = "https://localhost:3000/gettoken",
-    ):
-        self.client_id = client_id or os.getenv("NETDOCUMENTS_CLIENT_ID", "")
-        self.client_secret = client_secret or os.getenv(
-            "NETDOCUMENTS_CLIENT_SECRET", ""
-        )
-        self.redirect_uri = redirect_uri or os.getenv(
-            "NETDOCUMENTS_REDIRECT_URI", "https://localhost:3000/gettoken"
-        )
-        self.access_token: str | None = None
-        self.base_url: str = self.DEFAULT_BASE
-
-    def is_configured(self) -> bool:
-        return bool(self.client_id and self.client_secret)
-
-    def is_authenticated(self) -> bool:
-        return bool(self.access_token)
-
-    # -- OAuth -----------------------------------------------------------
-
-    def get_authorization_url(self) -> str:
-        params = {
-            "response_type": "code",
-            "client_id": self.client_id,
-            "redirect_uri": self.redirect_uri,
-            "scope": "read lookup",
-        }
-        return f"{self.AUTH_URL}?{urlencode(params)}"
-
-    def authenticate(self, auth_code: str) -> bool:
-        """Exchange an authorization code for an access token."""
-        creds = base64.b64encode(
-            f"{self.client_id}:{self.client_secret}".encode()
-        ).decode()
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Authorization": f"Basic {creds}",
-        }
-        data = {
-            "grant_type": "authorization_code",
-            "code": auth_code,
-            "redirect_uri": self.redirect_uri,
-        }
-        r = requests.post(self.TOKEN_URL, headers=headers, data=data, timeout=15)
-        r.raise_for_status()
-        token_data = r.json()
-        self.access_token = token_data["access_token"]
-        self.base_url = token_data.get("base_uri", self.DEFAULT_BASE)
-        return True
-
-    # -- Document operations ---------------------------------------------
-
-    def _get(self, endpoint: str, params: dict | None = None) -> dict:
-        if not self.access_token:
-            raise RuntimeError("Not authenticated — call authenticate() first.")
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Accept": "application/json",
-        }
-        url = f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
-        r = requests.get(url, headers=headers, params=params, timeout=15)
-        r.raise_for_status()
-        return r.json()
-
-    def search_documents(self, query: str, max_results: int = 10) -> list[dict]:
-        params = {"q": query, "max": max_results, "searchType": "fulltext"}
-        result = self._get("v1/search", params)
-        return result.get("items", [])
-
-    def download_document_text(self, doc_id: str, max_chars: int = 20_000) -> str:
-        """Download a document and return its text (best-effort)."""
-        if not self.access_token:
-            raise RuntimeError("Not authenticated.")
-        headers = {"Authorization": f"Bearer {self.access_token}"}
-        url = f"{self.base_url}/v1/documents/{doc_id}/content"
-        r = requests.get(url, headers=headers, timeout=30)
-        r.raise_for_status()
-        # Return raw text (works for .txt; binary formats won't be useful)
-        return r.text[:max_chars]
 
 
 # ======================================================================

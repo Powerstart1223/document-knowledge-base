@@ -52,10 +52,9 @@ docker compose up --build
 
 ### Core modules
 - `llm_backend.py` — `LLMBackend` class. Uses `openai>=1.0` client pointed at Ollama's OpenAI-compatible endpoint (`http://localhost:11434/v1`). Supports Ollama and OpenAI with the same interface. Passes `num_ctx=8192` via `extra_body` for Ollama to extend the default 2048-token context.
-- `document_generator.py` — `DocumentGenerator` class + `DOCUMENT_TYPES` dict. Handles: style example retrieval from ChromaDB (filtered by `document_type` metadata), optional SEC EDGAR / NetDocuments reference data fetch, prompt construction (system + user), LLM generation, and `.docx` output via `python-docx`.
+- `document_generator.py` — `DocumentGenerator` class + `DOCUMENT_TYPES` dict. Handles: style example retrieval from ChromaDB (filtered by `document_type` metadata), optional SEC EDGAR reference data fetch, prompt construction (system + user), LLM generation, and `.docx` output via `python-docx`.
 - `api_clients.py` — External data source clients:
   - `SECEdgarClient`: Free public SEC EDGAR full-text search and company filings API.
-  - `NetDocumentsClient`: OAuth 2.0 wrapper around NetDocuments REST API (wraps existing `netdocuments_direct_api.py` logic).
   - `LegalDatabaseClient`: Stub for Westlaw / LexisNexis (requires commercial API subscription).
 
 ### Authentication & UI modules (NEW in v2.0)
@@ -77,9 +76,6 @@ docker compose up --build
   - `render_footer()`: App footer with version and disclaimer
   - Helper functions for status badges, connection indicators, cards
 
-### Legacy NetDocuments scripts (standalone, not imported by the app)
-- `netdocuments_direct_api.py` — Full OAuth 2.0 client. Kept for reference.
-- `simple_netdocs_client.py` — Simplified token-based client. Kept for reference.
 
 ### Data flow
 1. **Authentication**: User logs in (or registers) → session created with `current_user` in session state
@@ -108,7 +104,6 @@ Configured via `.env` (local) or Streamlit Cloud secrets. See `.env.example` for
 - `OLLAMA_BASE_URL` — Ollama OpenAI-compatible endpoint (default `http://localhost:11434/v1`)
 - `OPENAI_API_KEY` — only needed if `LLM_PROVIDER=openai`
 - `SEC_EDGAR_USER_AGENT` — name + email for SEC EDGAR API
-- `NETDOCUMENTS_CLIENT_ID`, `NETDOCUMENTS_CLIENT_SECRET` — for NetDocuments OAuth
 - `LEGAL_DB_API_KEY` — for Westlaw/LexisNexis (stub)
 
 ## Key Caveats

@@ -232,7 +232,6 @@ All existing environment variables work unchanged:
 - `OPENAI_API_KEY`
 - `LLM_PROVIDER`
 - `SEC_EDGAR_USER_AGENT`
-- `NETDOCUMENTS_CLIENT_ID`, etc.
 
 No new environment variables required.
 

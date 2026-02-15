@@ -158,14 +158,6 @@ SEC_EDGAR_USER_AGENT=YourName your@email.com
 
 Or configure in **Settings** → **Integrations** → **SEC EDGAR**
 
-### NetDocuments Integration
-
-Requires NetDocuments OAuth credentials:
-
-1. Get credentials from NetDocuments developer portal
-2. Add to **Settings** → **Integrations** → **NetDocuments**
-3. Complete OAuth flow to authenticate
-
 ## Troubleshooting
 
 ### "LLM is not available"
@@ -208,7 +200,7 @@ ChromaDB downloads embedding models on first run (2-3 minutes). This only happen
 
 1. **Customize Settings**
    - Configure your preferred LLM model
-   - Set up external integrations (SEC EDGAR, NetDocuments)
+   - Set up external integrations (SEC EDGAR)
 
 2. **Upload Style Examples**
    - Upload your firm's existing documents

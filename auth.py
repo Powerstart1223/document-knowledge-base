@@ -7,14 +7,23 @@ Features:
 - Session management via Streamlit session state
 - Role-based access (admin, user)
 - Per-user data isolation
+- Email verification (6-digit code via SMTP)
+- Domain-restricted registration (@cypressllp.com only)
 """
 
 import sqlite3
 import bcrypt
 import re
-from datetime import datetime
+import os
+import random
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+ALLOWED_DOMAIN = "cypressllp.com"
 
 
 class User:
@@ -28,6 +37,7 @@ class User:
         role: str,
         created_at: str,
         is_active: bool = True,
+        email_verified: bool = False,
     ):
         self.user_id = user_id
         self.email = email
@@ -35,6 +45,7 @@ class User:
         self.role = role
         self.created_at = created_at
         self.is_active = is_active
+        self.email_verified = email_verified
 
     def is_admin(self) -> bool:
         return self.role == "admin"
@@ -47,6 +58,7 @@ class User:
             "role": self.role,
             "created_at": self.created_at,
             "is_active": self.is_active,
+            "email_verified": self.email_verified,
         }
 
 
@@ -71,9 +83,32 @@ class AuthManager:
                 full_name TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'user',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_active BOOLEAN DEFAULT 1
+                is_active BOOLEAN DEFAULT 1,
+                email_verified BOOLEAN DEFAULT 0,
+                verification_code TEXT,
+                verification_expires TIMESTAMP
             )
         """)
+
+        # Migrate existing tables: add new columns if missing
+        migrated_verified = False
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT 0")
+            migrated_verified = True
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN verification_code TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN verification_expires TIMESTAMP")
+        except sqlite3.OperationalError:
+            pass
+
+        # Mark all pre-existing users as verified so they aren't locked out
+        if migrated_verified:
+            cursor.execute("UPDATE users SET email_verified = 1 WHERE email_verified = 0")
 
         conn.commit()
         conn.close()
@@ -84,12 +119,13 @@ class AuthManager:
 
     def _create_default_admin(self):
         """Create a default admin user for initial setup."""
-        # Default credentials: admin@lawfirm.com / Admin123!
+        # Default credentials: admin@cypressllp.com / Admin123!
         self.register_user(
-            email="admin@lawfirm.com",
+            email="admin@cypressllp.com",
             password="Admin123!",
             full_name="System Administrator",
             role="admin",
+            skip_verification=True,
         )
 
     def _hash_password(self, password: str) -> str:
@@ -106,10 +142,13 @@ class AuthManager:
         )
 
     def validate_email(self, email: str) -> tuple[bool, str]:
-        """Validate email format."""
+        """Validate email format and domain restriction."""
         pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         if not re.match(pattern, email):
             return False, "Invalid email format"
+        domain = email.strip().lower().split("@")[-1]
+        if domain != ALLOWED_DOMAIN:
+            return False, f"Only @{ALLOWED_DOMAIN} email addresses are permitted"
         return True, ""
 
     def validate_password(self, password: str) -> tuple[bool, str]:
@@ -129,12 +168,64 @@ class AuthManager:
             return False, "Password must contain at least one special character"
         return True, ""
 
+    def _generate_verification_code(self) -> str:
+        """Generate a 6-digit verification code."""
+        return f"{random.randint(100000, 999999)}"
+
+    def _send_verification_email(self, email: str, code: str, full_name: str) -> tuple[bool, str]:
+        """Send verification code via SMTP."""
+        smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        smtp_user = os.getenv("SMTP_USER", "")
+        smtp_password = os.getenv("SMTP_PASSWORD", "")
+        smtp_from = os.getenv("SMTP_FROM", smtp_user)
+
+        if not smtp_user or not smtp_password:
+            return False, "Email service not configured. Contact administrator."
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "Verify your Document Generator account"
+        msg["From"] = smtp_from
+        msg["To"] = email
+
+        html = f"""\
+        <html>
+        <body style="font-family: Arial, sans-serif; background: #0f1923; color: #ffffff; padding: 2rem;">
+            <div style="max-width: 480px; margin: 0 auto; background: #1a2a3a; border-radius: 12px; padding: 2rem;">
+                <h2 style="color: #d4af37; margin-top: 0;">Email Verification</h2>
+                <p>Hi {full_name},</p>
+                <p>Your verification code is:</p>
+                <div style="text-align: center; margin: 1.5rem 0;">
+                    <span style="font-size: 2rem; font-weight: bold; letter-spacing: 0.3em; color: #d4af37;
+                                 background: rgba(212,175,55,0.1); padding: 0.75rem 1.5rem; border-radius: 8px;">
+                        {code}
+                    </span>
+                </div>
+                <p style="color: rgba(255,255,255,0.5); font-size: 0.85rem;">
+                    This code expires in 15 minutes. If you didn't request this, ignore this email.
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+        msg.attach(MIMEText(html, "html"))
+
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_password)
+                server.sendmail(smtp_from, email, msg.as_string())
+            return True, "Verification email sent"
+        except Exception as e:
+            return False, f"Failed to send verification email: {str(e)}"
+
     def register_user(
         self,
         email: str,
         password: str,
         full_name: str,
         role: str = "user",
+        skip_verification: bool = False,
     ) -> tuple[bool, str]:
         """
         Register a new user.
@@ -146,7 +237,7 @@ class AuthManager:
             return False, msg
 
         # Validate password (skip for default admin creation)
-        if email != "admin@lawfirm.com":
+        if not skip_verification:
             valid, msg = self.validate_password(password)
             if not valid:
                 return False, msg
@@ -156,11 +247,28 @@ class AuthManager:
             return False, "Full name is required"
 
         # Check if user already exists
-        if self.get_user_by_email(email):
-            return False, "Email already registered"
+        existing = self.get_user_by_email(email)
+        if existing:
+            if existing.email_verified:
+                return False, "Email already registered"
+            else:
+                # Allow re-registration if previous attempt was never verified
+                conn = sqlite3.connect(self.DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM users WHERE user_id = ?", (existing.user_id,))
+                conn.commit()
+                conn.close()
 
         # Hash password
         password_hash = self._hash_password(password)
+
+        # Generate verification code
+        verified = 1 if skip_verification else 0
+        code = None
+        expires = None
+        if not skip_verification:
+            code = self._generate_verification_code()
+            expires = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
 
         # Insert into database
         try:
@@ -168,18 +276,100 @@ class AuthManager:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO users (email, password_hash, full_name, role)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO users (email, password_hash, full_name, role,
+                                   email_verified, verification_code, verification_expires)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (email.lower(), password_hash, full_name.strip(), role)
+                (email.lower(), password_hash, full_name.strip(), role,
+                 verified, code, expires)
             )
             conn.commit()
             conn.close()
-            return True, "Registration successful"
         except sqlite3.IntegrityError:
             return False, "Email already registered"
         except Exception as e:
             return False, f"Registration failed: {str(e)}"
+
+        # Send verification email
+        if not skip_verification:
+            ok, send_msg = self._send_verification_email(email, code, full_name)
+            if not ok:
+                return False, send_msg
+            return True, "Verification code sent to your email"
+
+        return True, "Registration successful"
+
+    def verify_email(self, email: str, code: str) -> tuple[bool, str]:
+        """Verify a user's email with the 6-digit code."""
+        conn = sqlite3.connect(self.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT verification_code, verification_expires, email_verified FROM users WHERE email = ?",
+            (email.lower(),)
+        )
+        row = cursor.fetchone()
+
+        if not row:
+            conn.close()
+            return False, "Account not found"
+
+        stored_code, expires_str, already_verified = row
+
+        if already_verified:
+            conn.close()
+            return True, "Email already verified"
+
+        if not stored_code or not expires_str:
+            conn.close()
+            return False, "No verification pending"
+
+        if datetime.utcnow() > datetime.fromisoformat(expires_str):
+            conn.close()
+            return False, "Verification code has expired. Please register again."
+
+        if code.strip() != stored_code:
+            conn.close()
+            return False, "Invalid verification code"
+
+        cursor.execute(
+            "UPDATE users SET email_verified = 1, verification_code = NULL, verification_expires = NULL WHERE email = ?",
+            (email.lower(),)
+        )
+        conn.commit()
+        conn.close()
+        return True, "Email verified successfully"
+
+    def resend_verification(self, email: str) -> tuple[bool, str]:
+        """Resend a new verification code."""
+        conn = sqlite3.connect(self.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT full_name, email_verified FROM users WHERE email = ?",
+            (email.lower(),)
+        )
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return False, "Account not found"
+
+        full_name, already_verified = row
+        if already_verified:
+            conn.close()
+            return True, "Email already verified"
+
+        code = self._generate_verification_code()
+        expires = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+        cursor.execute(
+            "UPDATE users SET verification_code = ?, verification_expires = ? WHERE email = ?",
+            (code, expires, email.lower())
+        )
+        conn.commit()
+        conn.close()
+
+        ok, send_msg = self._send_verification_email(email, code, full_name)
+        if not ok:
+            return False, send_msg
+        return True, "New verification code sent"
 
     def login(self, email: str, password: str) -> tuple[bool, Optional[User], str]:
         """
@@ -193,6 +383,9 @@ class AuthManager:
 
         if not user.is_active:
             return False, None, "Account has been deactivated. Contact administrator."
+
+        if not user.email_verified:
+            return False, None, "Email not verified. Please check your inbox for the verification code."
 
         # Verify password
         conn = sqlite3.connect(self.DB_PATH)
@@ -220,7 +413,7 @@ class AuthManager:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT user_id, email, full_name, role, created_at, is_active
+            SELECT user_id, email, full_name, role, created_at, is_active, email_verified
             FROM users WHERE email = ?
             """,
             (email.lower(),)
@@ -236,6 +429,7 @@ class AuthManager:
                 role=row[3],
                 created_at=row[4],
                 is_active=bool(row[5]),
+                email_verified=bool(row[6]),
             )
         return None
 
@@ -245,7 +439,7 @@ class AuthManager:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT user_id, email, full_name, role, created_at, is_active
+            SELECT user_id, email, full_name, role, created_at, is_active, email_verified
             FROM users WHERE user_id = ?
             """,
             (user_id,)
@@ -261,6 +455,7 @@ class AuthManager:
                 role=row[3],
                 created_at=row[4],
                 is_active=bool(row[5]),
+                email_verified=bool(row[6]),
             )
         return None
 
@@ -270,7 +465,7 @@ class AuthManager:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT user_id, email, full_name, role, created_at, is_active
+            SELECT user_id, email, full_name, role, created_at, is_active, email_verified
             FROM users ORDER BY created_at DESC
             """
         )
@@ -285,6 +480,7 @@ class AuthManager:
                 role=row[3],
                 created_at=row[4],
                 is_active=bool(row[5]),
+                email_verified=bool(row[6]),
             )
             for row in rows
         ]
@@ -398,6 +594,8 @@ def init_session_state(st_session_state):
         st_session_state.current_user = None
     if "show_register" not in st_session_state:
         st_session_state.show_register = False
+    if "verify_email" not in st_session_state:
+        st_session_state.verify_email = None
 
 
 def require_auth(st_session_state) -> bool:

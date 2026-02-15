@@ -89,7 +89,6 @@ SEC_EDGAR_USER_AGENT = "YourName your@email.com"
 - ✓ Document generation (4 types)
 - ✓ .docx export with formatting
 - ✓ SEC EDGAR integration (optional)
-- ✓ NetDocuments OAuth (optional)
 - ✓ Environment auto-detection
 - ✓ Graceful error handling
 

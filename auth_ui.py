@@ -5,7 +5,7 @@ Sigma-inspired minimal, elegant dark login design.
 """
 
 import streamlit as st
-from auth import AuthManager, init_session_state, logout, User
+from auth import AuthManager, init_session_state, logout, User, ALLOWED_DOMAIN
 
 
 _LOGIN_CSS = """
@@ -274,7 +274,7 @@ def render_login_page(auth_manager: AuthManager):
     with st.form("login_form", clear_on_submit=False):
         email = st.text_input(
             "Email",
-            placeholder="you@lawfirm.com",
+            placeholder=f"you@{ALLOWED_DOMAIN}",
             key="login_email"
         )
 
@@ -313,9 +313,9 @@ def render_login_page(auth_manager: AuthManager):
 
     # Demo credentials — collapsed
     with st.expander("Demo credentials"):
-        st.markdown("""
+        st.markdown(f"""
         <div class="demo-creds">
-            <strong>Admin:</strong> <code>admin@lawfirm.com</code> / <code>Admin123!</code><br>
+            <strong>Admin:</strong> <code>admin@{ALLOWED_DOMAIN}</code> / <code>Admin123!</code><br>
             <em style="font-size: 0.78rem;">Change password after first login</em>
         </div>
         """, unsafe_allow_html=True)
@@ -329,7 +329,7 @@ def render_registration_page(auth_manager: AuthManager):
     st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
 
     # Brand
-    st.markdown("""
+    st.markdown(f"""
     <div class="login-brand">
         <div class="logo-icon">&#9878;</div>
         <h1>Document Generator</h1>
@@ -337,6 +337,12 @@ def render_registration_page(auth_manager: AuthManager):
     </div>
     <div class="form-header">
         <h2>Create your account</h2>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div style="text-align:center; color: rgba(255,255,255,0.4); font-size: 0.82rem; margin-bottom: 1rem;">
+        Only <strong style="color:#d4af37;">@{ALLOWED_DOMAIN}</strong> email addresses are permitted
     </div>
     """, unsafe_allow_html=True)
 
@@ -349,7 +355,7 @@ def render_registration_page(auth_manager: AuthManager):
 
         email = st.text_input(
             "Email",
-            placeholder="jane.smith@lawfirm.com",
+            placeholder=f"jane.smith@{ALLOWED_DOMAIN}",
             key="reg_email"
         )
 
@@ -392,12 +398,10 @@ def render_registration_page(auth_manager: AuthManager):
                     role="user"
                 )
                 if success:
+                    st.session_state.verify_email = email.lower()
                     st.session_state.show_register = False
-                    success, user, _ = auth_manager.login(email, password)
-                    if success:
-                        st.session_state.authenticated = True
-                        st.session_state.current_user = user
-                        st.rerun()
+                    st.success("Check your inbox for the verification code.")
+                    st.rerun()
                 else:
                     st.error(message)
 
@@ -406,6 +410,74 @@ def render_registration_page(auth_manager: AuthManager):
     if st.button("Back to Sign In", use_container_width=True):
         st.session_state.show_register = False
         st.rerun()
+
+
+def render_verification_page(auth_manager: AuthManager):
+    """Render the email verification code entry page."""
+
+    st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
+
+    email = st.session_state.get("verify_email", "")
+
+    st.markdown("""
+    <div class="login-brand">
+        <div class="logo-icon">&#9878;</div>
+        <h1>Document Generator</h1>
+        <p>AI-powered legal drafting platform</p>
+    </div>
+    <div class="form-header">
+        <h2>Verify your email</h2>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div style="text-align:center; color: rgba(255,255,255,0.5); font-size: 0.88rem; margin-bottom: 1.25rem;">
+        We sent a 6-digit code to <strong style="color:#d4af37;">{email}</strong>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.form("verify_form", clear_on_submit=False):
+        code = st.text_input(
+            "Verification Code",
+            placeholder="123456",
+            max_chars=6,
+            key="verify_code"
+        )
+
+        submit = st.form_submit_button(
+            "Verify Email",
+            type="primary",
+            use_container_width=True
+        )
+
+        if submit:
+            if not code or len(code.strip()) != 6:
+                st.error("Please enter the 6-digit code.")
+            else:
+                success, message = auth_manager.verify_email(email, code)
+                if success:
+                    st.session_state.verify_email = None
+                    st.success("Email verified! You can now sign in.")
+                    import time
+                    time.sleep(1.5)
+                    st.rerun()
+                else:
+                    st.error(message)
+
+    st.markdown('<div class="login-divider"></div>', unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Resend Code", use_container_width=True):
+            success, message = auth_manager.resend_verification(email)
+            if success:
+                st.success("New code sent!")
+            else:
+                st.error(message)
+    with col2:
+        if st.button("Back to Sign In", use_container_width=True, key="verify_back"):
+            st.session_state.verify_email = None
+            st.rerun()
 
 
 def render_admin_panel(auth_manager: AuthManager, current_user: User):

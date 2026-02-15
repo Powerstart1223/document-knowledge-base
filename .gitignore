@@ -58,11 +58,6 @@ Thumbs.db
 *.swp
 *.swo
 
-# NetDocuments config (will be set via environment variables)
-.netdocuments_config.json
-netdocuments_sync.log
-netdocuments_sync_state.json
-
 # Fine-tuning outputs
 finetune_venv/
 finetune_output/

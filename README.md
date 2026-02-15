@@ -28,7 +28,6 @@ A RAG-powered legal document generation system with AI-assisted drafting, built 
 - **Style Learning** - Automatically learns from your existing documents to match your firm's writing style
 - **External Data Integration**:
   - SEC EDGAR filings (free, public)
-  - NetDocuments OAuth integration
   - Westlaw / LexisNexis support (stub)
 - **Cloud & Local Deployment** - Works with OpenAI (cloud) or Ollama (local)
 - **Professional Output** - Export to formatted .docx with proper legal document structure
@@ -110,7 +109,7 @@ Generate professional legal documents using AI:
    - Go to "Generate Document" tab
    - Select document type
    - Fill in the parameters (parties, dates, terms, etc.)
-   - Optionally enable SEC EDGAR or NetDocuments for reference data
+   - Optionally enable SEC EDGAR for reference data
    - Click "Generate Document"
 
 3. **Review and Download**:
@@ -126,12 +125,6 @@ Generate professional legal documents using AI:
 - Automatic integration with corporate filings
 - No API key required (just provide User-Agent)
 
-### NetDocuments (Optional)
-- OAuth authentication
-- Search firm document repository
-- Pull related documents for context
-- Configure in Settings tab
-
 ### Westlaw / LexisNexis (Stub)
 - API structure ready
 - Requires commercial API subscription
@@ -144,7 +137,7 @@ document-knowledge-base/
 ├── streamlit_app.py          # Main Streamlit application
 ├── llm_backend.py            # LLM abstraction (Ollama/OpenAI)
 ├── document_generator.py     # Document generation pipeline
-├── api_clients.py            # External API clients (SEC, NetDocuments, etc.)
+├── api_clients.py            # External API clients (SEC EDGAR, etc.)
 ├── requirements.txt          # Python dependencies
 ├── .env.example              # Environment variables template
 ├── .streamlit/
@@ -162,7 +155,7 @@ document-knowledge-base/
 3. **RAG Chat**: User questions retrieve relevant chunks, then LLM generates answers with citations
 4. **Document Generation**:
    - Retrieves style examples from uploaded documents
-   - Optionally fetches reference data from SEC EDGAR or NetDocuments
+   - Optionally fetches reference data from SEC EDGAR
    - Builds structured prompts with user parameters
    - Generates professional legal documents via LLM
    - Exports to formatted .docx with proper styling

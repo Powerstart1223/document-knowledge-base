@@ -8,9 +8,6 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - USE_LOCAL_MODEL=${USE_LOCAL_MODEL:-false}
-      - NETDOCUMENTS_ENABLED=${NETDOCUMENTS_ENABLED:-false}
-      - NETDOCUMENTS_CLIENT_ID=${NETDOCUMENTS_CLIENT_ID}
-      - NETDOCUMENTS_CLIENT_SECRET=${NETDOCUMENTS_CLIENT_SECRET}
     volumes:
       # Persist data across container restarts
       - ./vectordb:/app/vectordb

@@ -56,11 +56,6 @@ OPENAI_MODEL = "gpt-4o-mini"
 # Optional: SEC EDGAR (free, just provide your contact info)
 SEC_EDGAR_USER_AGENT = "YourName your@email.com"
 
-# Optional: NetDocuments OAuth
-NETDOCUMENTS_CLIENT_ID = ""
-NETDOCUMENTS_CLIENT_SECRET = ""
-NETDOCUMENTS_REDIRECT_URI = ""
-
 # Optional: Westlaw/LexisNexis
 LEGAL_DB_API_KEY = ""
 ```
@@ -218,9 +213,6 @@ OPENAI_API_KEY=sk-...your_key_here
 
 # Optional
 USE_LOCAL_MODEL=false
-NETDOCUMENTS_ENABLED=false
-NETDOCUMENTS_CLIENT_ID=your_client_id
-NETDOCUMENTS_CLIENT_SECRET=your_client_secret
 ```
 
 ### Platform-Specific Setup:
@@ -267,7 +259,6 @@ NETDOCUMENTS_CLIENT_SECRET=your_client_secret
 - [ ] Document storage is local to your deployment
 - [ ] Per-user ChromaDB collections prevent data leakage between users
 - [ ] OpenAI API calls follow their data usage policies
-- [ ] NetDocuments uses OAuth for secure access
 - [ ] User database (`users.db`) contains hashed passwords only
 - [ ] Consider GDPR/compliance requirements for document storage
 

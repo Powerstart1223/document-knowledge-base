@@ -262,7 +262,7 @@ Before deploying v2.0 to production:
 
 1. **Change default admin password**
 2. **Create user accounts** for your team
-3. **Configure integrations** (SEC EDGAR, NetDocuments) in Settings
+3. **Configure integrations** (SEC EDGAR) in Settings
 4. **Upload style examples** to train the document generator
 5. **Test all features** with real documents
 6. **Review security settings** in admin panel

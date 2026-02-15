@@ -107,7 +107,7 @@ AUTO_SCAN_ENABLED=true
 ### Default Scan Paths
 
 1. `C:/Users/SJK/Documents/` — Personal documents folder
-2. `E:/etdocumentsdownload/` — NetDocuments download folder
+2. `E:/etdocumentsdownload/` — Document download folder
 
 You can add additional paths by updating the `SCAN_PATHS` environment variable.
 
