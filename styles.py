@@ -521,6 +521,70 @@ def get_custom_css() -> str:
         letter-spacing: 0.5px;
     }
 
+    /* Document Type Grid Cards */
+    .doc-type-grid-card {
+        background: white;
+        border: 2px solid var(--border-color);
+        border-radius: 16px;
+        padding: 2rem 1.5rem;
+        text-align: center;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .doc-type-grid-card:hover {
+        border-color: var(--accent-gold);
+        box-shadow: 0 8px 24px rgba(212, 175, 55, 0.2);
+        transform: translateY(-4px);
+    }
+
+    .doc-type-icon {
+        font-size: 3.5rem;
+        margin-bottom: 1rem;
+        filter: grayscale(20%);
+        transition: all 0.3s ease;
+    }
+
+    .doc-type-grid-card:hover .doc-type-icon {
+        filter: grayscale(0%);
+        transform: scale(1.1);
+    }
+
+    /* Landing Page Cards */
+    .landing-card {
+        background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+        border: 2px solid var(--border-color);
+        border-radius: 20px;
+        padding: 3rem 2rem;
+        text-align: center;
+        transition: all 0.4s ease;
+        cursor: pointer;
+        height: 100%;
+        box-shadow: var(--shadow-sm);
+    }
+
+    .landing-card:hover {
+        border-color: var(--accent-gold);
+        box-shadow: 0 12px 32px rgba(26, 35, 50, 0.12);
+        transform: translateY(-8px);
+        background: linear-gradient(135deg, #ffffff 0%, #ffffff 100%);
+    }
+
+    .landing-card-icon {
+        font-size: 5rem;
+        margin-bottom: 1.5rem;
+        transition: all 0.3s ease;
+    }
+
+    .landing-card:hover .landing-card-icon {
+        transform: scale(1.15);
+    }
+
     /* ====================================================================
        Loading & Progress
        ==================================================================== */

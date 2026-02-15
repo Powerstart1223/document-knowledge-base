@@ -17,6 +17,11 @@ load_dotenv()
 import streamlit as st
 from typing import List
 from datetime import date
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 import chromadb
 from chromadb.utils import embedding_functions
@@ -24,6 +29,11 @@ from chromadb.utils import embedding_functions
 from llm_backend import LLMBackend
 from document_generator import DocumentGenerator, DOCUMENT_TYPES
 from api_clients import SECEdgarClient
+
+# Continuous learning pipeline imports
+from knowledge_db import KnowledgeDB
+from document_scanner import DocumentScanner
+from background_scanner import ScannerManager
 
 # Authentication imports
 from auth import AuthManager, init_session_state, require_auth, get_user_collection_name
@@ -123,6 +133,9 @@ _DEFAULTS = {
     "generated_text": "",
     "generated_title": "",
     "onboarding_complete": False,
+    "workflow_mode": None,  # None, "edit", or "create"
+    "show_settings": False,
+    "show_knowledge_base": False,
 }
 
 for key, val in _DEFAULTS.items():
@@ -143,6 +156,22 @@ def get_chroma_client():
 def get_embedding_function():
     return embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name="all-MiniLM-L6-v2"
+    )
+
+
+@st.cache_resource
+def get_knowledge_db():
+    """Get the knowledge database instance."""
+    return KnowledgeDB(db_path="./knowledge.db")
+
+
+@st.cache_resource
+def get_background_scanner(_llm, _collection, _knowledge_db):
+    """Initialize and get the background scanner (cached)."""
+    return ScannerManager.initialize(
+        llm=_llm,
+        chroma_collection=_collection,
+        knowledge_db=_knowledge_db
     )
 
 
@@ -350,87 +379,83 @@ def get_db_stats() -> dict:
 # ======================================================================
 
 def render_sidebar():
-    """Render the sidebar with user info and document upload."""
+    """Render the sidebar with user info and settings access."""
     current_user = st.session_state.current_user
 
     # Auth sidebar section
     render_auth_sidebar(current_user)
 
-    # Document upload section
+    # Settings button
     st.markdown("""
     <div class="card-header">
-        📄 Upload Documents
+        ⚙️ Quick Access
     </div>
     """, unsafe_allow_html=True)
 
-    st.caption("Upload documents to build your knowledge base")
+    if st.button("⚙️ Settings", use_container_width=True, key="sidebar_settings"):
+        st.session_state.show_settings = True
+        st.rerun()
 
-    doc_type_options = list(DOCUMENT_TYPES.keys()) + ["reference"]
-    selected_type = st.selectbox(
-        "Document category",
-        options=doc_type_options,
-        format_func=lambda k: (
-            DOCUMENT_TYPES[k]["label"] if k in DOCUMENT_TYPES else "Reference / Other"
-        ),
-        help="Categorize your documents for better AI-powered retrieval and generation",
-    )
-
-    uploaded_files = st.file_uploader(
-        "Upload documents",
-        type=["txt", "pdf", "docx"],
-        accept_multiple_files=True,
-        key="file_uploader"
-    )
-
-    if uploaded_files:
-        if st.button("Process Documents", type="primary", use_container_width=True):
-            with st.spinner("Processing documents..."):
-                process_uploaded_files(uploaded_files, selected_type)
+    if st.button("📚 Knowledge Base", use_container_width=True, key="sidebar_knowledge"):
+        st.session_state.show_knowledge_base = True
+        st.rerun()
 
     st.divider()
 
-    # Database stats
+    # Knowledge Base Status
     st.markdown("""
     <div class="card-header">
-        📊 Database Stats
+        📊 Knowledge Base
     </div>
     """, unsafe_allow_html=True)
 
-    stats = get_db_stats()
-    st.metric("Total Chunks", stats["total"])
+    try:
+        knowledge_db = get_knowledge_db()
+        stats = knowledge_db.get_stats()
 
-    if stats["total"] > 0:
-        for dtype in list(DOCUMENT_TYPES.keys()) + ["reference"]:
-            count = stats.get(dtype, 0)
-            if count > 0:
-                label = (
-                    DOCUMENT_TYPES[dtype]["label"]
-                    if dtype in DOCUMENT_TYPES
-                    else "Reference"
-                )
-                st.caption(f"  {label}: {count}")
+        st.markdown(f"""
+        <div style="font-size: 0.85rem; line-height: 1.8;">
+            <strong>{stats['total_documents']}</strong> documents indexed<br>
+            <strong>{stats['document_types']}</strong> document types learned
+        </div>
+        """, unsafe_allow_html=True)
 
-    collection = get_collection()
-    if collection.count() > 0:
-        if st.button("🗑️ Clear My Database", use_container_width=True):
-            if st.button("⚠️ Confirm Delete", type="secondary", use_container_width=True):
-                client = get_chroma_client()
-                collection_name = get_user_collection_name(current_user.user_id)
-                try:
-                    client.delete_collection(collection_name)
-                    st.session_state.processed_files = set()
-                    st.session_state.messages = []
-                    st.success("Database cleared successfully!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error clearing database: {e}")
+        # Get scanner status
+        scanner = ScannerManager.get_instance()
+        if scanner:
+            status = scanner.get_status()
+            if status["is_running"]:
+                if status.get("current_progress"):
+                    prog = status["current_progress"]
+                    st.caption(f"Scanning... {prog['current']}/{prog['total']}")
+                elif status.get("last_scan_end"):
+                    import dateutil.parser
+                    try:
+                        last_scan = dateutil.parser.parse(status["last_scan_end"])
+                        import datetime
+                        time_ago = datetime.datetime.now(datetime.timezone.utc) - last_scan
+                        minutes_ago = int(time_ago.total_seconds() / 60)
+                        st.caption(f"Last scan: {minutes_ago} min ago")
+                    except:
+                        st.caption("Scanner running")
+            else:
+                st.caption("Scanner stopped")
+
+        if st.button("🔍 Scan Now", use_container_width=True, key="sidebar_scan_now"):
+            scanner = ScannerManager.get_instance()
+            if scanner:
+                scanner.trigger_scan()
+                st.toast("Scan triggered!", icon="🔍")
+
+    except Exception as e:
+        st.caption("Knowledge base not initialized")
 
     st.divider()
 
     # Connection status
     st.markdown("""
     <div class="card-header">
-        🔌 Connections
+        🔌 Status
     </div>
     """, unsafe_allow_html=True)
 
@@ -440,7 +465,7 @@ def render_sidebar():
         st.markdown(f"""
         <div class="status-badge status-success">
             <span class="connection-indicator connection-success"></span>
-            LLM: {provider_label} ({st.session_state.llm_model})
+            {provider_label} ({st.session_state.llm_model})
         </div>
         """, unsafe_allow_html=True)
     else:
@@ -448,20 +473,6 @@ def render_sidebar():
         <div class="status-badge status-error">
             <span class="connection-indicator connection-error"></span>
             LLM: Not connected
-        </div>
-        """, unsafe_allow_html=True)
-
-    sec = get_sec_client()
-    if sec.is_configured():
-        st.markdown("""
-        <div class="status-badge status-success">
-            SEC EDGAR: Configured
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div class="status-badge status-warning">
-            SEC EDGAR: Not configured
         </div>
         """, unsafe_allow_html=True)
 
@@ -754,7 +765,7 @@ def render_mimic_workflow():
             with st.spinner("Analyzing document structure and extracting fields..."):
                 llm = get_llm()
                 collection = get_collection()
-                generator = DocumentGenerator(llm, collection)
+                generator = DocumentGenerator(llm, collection, knowledge_db=get_knowledge_db())
                 analysis = generator.analyze_document(ref_text)
 
                 # Store in session state
@@ -810,7 +821,7 @@ def render_mimic_workflow():
                     with st.spinner("Generating document in the style of your reference..."):
                         llm = get_llm()
                         collection = get_collection()
-                        generator = DocumentGenerator(llm, collection)
+                        generator = DocumentGenerator(llm, collection, knowledge_db=get_knowledge_db())
 
                         try:
                             text = generator.generate_from_template(
@@ -928,7 +939,7 @@ def render_guided_workflow():
                         with st.spinner("Generating your document..."):
                             llm = get_llm()
                             collection = get_collection()
-                            generator = DocumentGenerator(llm, collection)
+                            generator = DocumentGenerator(llm, collection, knowledge_db=get_knowledge_db())
 
                             try:
                                 text = generator.generate(
@@ -1045,7 +1056,7 @@ def render_quick_workflow():
             return
 
         collection = get_collection()
-        generator = DocumentGenerator(llm, collection)
+        generator = DocumentGenerator(llm, collection, knowledge_db=get_knowledge_db())
         sec_client = get_sec_client() if use_sec else None
 
         with st.spinner("Generating document... this may take a moment."):
@@ -1341,6 +1352,983 @@ def render_settings_tab():
 
 
 # ======================================================================
+# NEW WORKFLOW: Two-Path Landing Page
+# ======================================================================
+
+def render_landing_page():
+    """Render the landing page with two main workflow options."""
+    st.markdown("""
+    <div style="max-width: 1000px; margin: 2rem auto;">
+        <div style="text-align: center; margin-bottom: 3rem;">
+            <h1 style="font-size: 2.5rem; margin-bottom: 1rem; color: var(--primary-navy);">
+                What would you like to do today?
+            </h1>
+            <p style="font-size: 1.1rem; color: var(--text-secondary);">
+                Choose your workflow to get started
+            </p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2, gap="large")
+
+    with col1:
+        st.markdown("""
+        <div class="card" style="text-align: center; cursor: pointer; padding: 3rem 2rem; height: 100%;">
+            <div style="font-size: 4rem; margin-bottom: 1.5rem;">📝</div>
+            <h2 style="margin-bottom: 1rem; color: var(--primary-navy);">Edit an Existing Document</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 2rem; line-height: 1.6;">
+                Upload a document and use AI to make changes, revisions, or improvements
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if st.button("Edit Existing Document", type="primary", use_container_width=True, key="btn_edit"):
+            st.session_state.workflow_mode = "edit"
+            st.rerun()
+
+    with col2:
+        st.markdown("""
+        <div class="card" style="text-align: center; cursor: pointer; padding: 3rem 2rem; height: 100%;">
+            <div style="font-size: 4rem; margin-bottom: 1.5rem;">✨</div>
+            <h2 style="margin-bottom: 1rem; color: var(--primary-navy);">Create a New Document</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 2rem; line-height: 1.6;">
+                Generate a professional legal document from scratch using AI templates
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if st.button("Create New Document", type="primary", use_container_width=True, key="btn_create"):
+            st.session_state.workflow_mode = "create"
+            st.rerun()
+
+
+# ======================================================================
+# PATH A: Edit Existing Document Workflow
+# ======================================================================
+
+def render_edit_workflow():
+    """Path A: Upload → Preview → AI Chat → Edit → Export."""
+
+    # Back button
+    if st.button("← Back to Home", key="back_from_edit"):
+        st.session_state.workflow_mode = None
+        st.session_state.pop("edit_document_text", None)
+        st.session_state.pop("edit_document_history", None)
+        st.session_state.pop("edit_chat_messages", None)
+        st.rerun()
+
+    st.markdown("""
+    <div class="card-header">
+        📝 Edit an Existing Document
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Step 1: Upload (if not already uploaded)
+    if "edit_document_text" not in st.session_state:
+        st.markdown("""
+        <div style="max-width: 800px; margin: 2rem auto;">
+            <h3>Upload Your Document</h3>
+            <p style="color: var(--text-secondary);">
+                Upload a document you'd like to edit. The AI will help you make changes,
+                revisions, or improvements.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        uploaded_file = st.file_uploader(
+            "Choose a document",
+            type=["pdf", "docx", "txt"],
+            key="edit_upload",
+            help="Upload a PDF, DOCX, or TXT file"
+        )
+
+        if uploaded_file:
+            with st.spinner("Reading document..."):
+                text = extract_text_from_file(uploaded_file)
+
+            if len(text) < 50:
+                st.error("Document appears to be too short or unreadable. Please upload a valid document.")
+            else:
+                st.session_state.edit_document_text = text
+                st.session_state.edit_document_original = text
+                st.session_state.edit_document_history = [{"version": 0, "text": text, "change": "Original document"}]
+                st.session_state.edit_chat_messages = []
+                st.session_state.edit_filename = uploaded_file.name
+                st.success(f"✅ Loaded {len(text)} characters from {uploaded_file.name}")
+                st.rerun()
+        return
+
+    # Step 2+: Preview and Edit Interface
+    st.markdown(f"""
+    <div class="info-card">
+        <strong>Document:</strong> {st.session_state.get('edit_filename', 'Untitled')}<br>
+        <strong>Length:</strong> {len(st.session_state.edit_document_text)} characters<br>
+        <strong>Version:</strong> {len(st.session_state.edit_document_history)}
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Two-column layout: Preview (left) | AI Assistant (right)
+    col_preview, col_ai = st.columns([3, 2], gap="large")
+
+    with col_preview:
+        st.markdown("""
+        <div class="card-header">
+            📄 Document Preview & Edit
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Editable preview
+        edited_text = st.text_area(
+            "Edit document directly:",
+            value=st.session_state.edit_document_text,
+            height=500,
+            key="edit_preview_area",
+            label_visibility="collapsed"
+        )
+
+        # If user manually edited, update the text
+        if edited_text != st.session_state.edit_document_text:
+            st.session_state.edit_document_text = edited_text
+
+        # Control buttons
+        col_undo, col_export, col_new = st.columns([1, 1, 1])
+
+        with col_undo:
+            if len(st.session_state.edit_document_history) > 1:
+                if st.button("↶ Undo", use_container_width=True):
+                    st.session_state.edit_document_history.pop()
+                    last = st.session_state.edit_document_history[-1]
+                    st.session_state.edit_document_text = last["text"]
+                    st.toast("Undo successful", icon="↶")
+                    st.rerun()
+
+        with col_export:
+            docx_bytes = DocumentGenerator.text_to_docx(
+                st.session_state.edit_document_text,
+                st.session_state.get('edit_filename', 'Edited_Document')
+            )
+            st.download_button(
+                label="⬇️ Download .docx",
+                data=docx_bytes,
+                file_name=f"{st.session_state.get('edit_filename', 'document')}_edited.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True
+            )
+
+        with col_new:
+            if st.button("🔄 Start Over", use_container_width=True):
+                st.session_state.pop("edit_document_text", None)
+                st.session_state.pop("edit_document_history", None)
+                st.session_state.pop("edit_chat_messages", None)
+                st.rerun()
+
+        # Version history
+        if len(st.session_state.edit_document_history) > 1:
+            with st.expander("📜 Version History"):
+                for i, version in enumerate(reversed(st.session_state.edit_document_history)):
+                    st.caption(f"**v{version['version']}:** {version['change']}")
+
+    with col_ai:
+        st.markdown("""
+        <div class="card-header">
+            🤖 AI Assistant
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.caption("Ask the AI to make changes to your document:")
+
+        # Chat history
+        for msg in st.session_state.edit_chat_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # Chat input
+        if prompt := st.chat_input("E.g., 'Make this more formal' or 'Add a confidentiality clause'"):
+            st.session_state.edit_chat_messages.append({"role": "user", "content": prompt})
+
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            with st.chat_message("assistant"):
+                with st.spinner("AI is processing your request..."):
+                    llm = get_llm()
+
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a legal document editing assistant. The user will provide "
+                                "a current document and request changes. Apply the requested changes "
+                                "and return the FULL updated document text. Be precise and maintain "
+                                "the document's structure unless asked to change it."
+                            )
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Current document:\n\n{st.session_state.edit_document_text}\n\n"
+                                f"User request: {prompt}\n\n"
+                                "Please provide the full updated document with the requested changes applied."
+                            )
+                        }
+                    ]
+
+                    try:
+                        response = llm.chat(messages, temperature=0.2, max_tokens=4096)
+
+                        # Update document
+                        version_num = len(st.session_state.edit_document_history)
+                        st.session_state.edit_document_text = response
+                        st.session_state.edit_document_history.append({
+                            "version": version_num,
+                            "text": response,
+                            "change": prompt[:50] + ("..." if len(prompt) > 50 else "")
+                        })
+
+                        st.markdown("✅ Changes applied to the document!")
+                        st.session_state.edit_chat_messages.append({
+                            "role": "assistant",
+                            "content": "✅ Changes applied to the document!"
+                        })
+                        st.rerun()
+
+                    except Exception as e:
+                        error_msg = f"Error: {str(e)}"
+                        st.error(error_msg)
+                        st.session_state.edit_chat_messages.append({
+                            "role": "assistant",
+                            "content": error_msg
+                        })
+
+
+# ======================================================================
+# PATH B: Create New Document Workflow
+# ======================================================================
+
+def render_create_workflow():
+    """Path B: Doc Type Selection → Dynamic Fields → Generate → Preview/Edit → Export."""
+
+    # Back button
+    if st.button("← Back to Home", key="back_from_create"):
+        st.session_state.workflow_mode = None
+        st.session_state.pop("create_doc_type", None)
+        st.session_state.pop("create_fields", None)
+        st.session_state.pop("create_generated_text", None)
+        st.session_state.pop("create_chat_messages", None)
+        st.rerun()
+
+    st.markdown("""
+    <div class="card-header">
+        ✨ Create a New Document
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Step 1: Document Type Selection
+    if "create_doc_type" not in st.session_state:
+        st.markdown("""
+        <div style="max-width: 1400px; margin: 1.5rem auto;">
+            <h3 style="text-align: center; margin-bottom: 1.5rem;">Select Document Type</h3>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Search/Filter bar
+        search_query = st.text_input(
+            "🔍 Search document types...",
+            placeholder="Search by name or keyword (e.g., employment, lease, IP)",
+            key="doc_type_search",
+            label_visibility="collapsed"
+        )
+
+        # Comprehensive document type catalog organized by category
+        doc_types_catalog = {
+            "Corporate & Business": {
+                "Contract / Agreement": {"icon": "📜", "desc": "General contracts and agreements"},
+                "Shareholder Agreement": {"icon": "📊", "desc": "Rights and obligations among shareholders"},
+                "Partnership Agreement": {"icon": "🤝", "desc": "Business partnership terms"},
+                "Stock Purchase Agreement": {"icon": "💰", "desc": "Purchase and sale of stock"},
+                "Asset Purchase Agreement": {"icon": "🏪", "desc": "Purchase and sale of assets"},
+                "Merger Agreement": {"icon": "🔀", "desc": "Terms for company mergers"},
+                "Franchise Agreement": {"icon": "🏬", "desc": "Franchising rights and obligations"},
+                "Consulting Agreement": {"icon": "💼", "desc": "Professional consulting services"},
+                "Service Level Agreement (SLA)": {"icon": "📈", "desc": "Service expectations and metrics"},
+                "Board Resolution": {"icon": "📋", "desc": "Formal board decisions"},
+            },
+            "Employment & HR": {
+                "Employment Agreement": {"icon": "💼", "desc": "Full-time employment contract"},
+                "Independent Contractor Agreement": {"icon": "🤝", "desc": "Contract for contractors"},
+                "Offer Letter": {"icon": "📧", "desc": "Formal job offer"},
+                "Severance Agreement": {"icon": "🎁", "desc": "Employment separation terms"},
+                "Non-Compete Agreement": {"icon": "🚫", "desc": "Restrict employee competition"},
+                "Employee Handbook": {"icon": "📖", "desc": "Company policies and procedures"},
+            },
+            "Real Estate & Property": {
+                "Commercial Lease Agreement": {"icon": "🏢", "desc": "Lease for commercial property"},
+                "Residential Lease Agreement": {"icon": "🏠", "desc": "Lease for residential property"},
+                "Purchase and Sale Agreement (Real Estate)": {"icon": "🏡", "desc": "Real estate purchase contract"},
+                "Property Management Agreement": {"icon": "🔑", "desc": "Property management services"},
+            },
+            "Intellectual Property": {
+                "NDA / Confidentiality Agreement": {"icon": "🔒", "desc": "Protect confidential information"},
+                "Patent Assignment Agreement": {"icon": "🔬", "desc": "Transfer of patent rights"},
+                "Trademark License Agreement": {"icon": "™️", "desc": "License to use a trademark"},
+                "Copyright Assignment": {"icon": "©️", "desc": "Transfer of copyright ownership"},
+                "Software License Agreement": {"icon": "💻", "desc": "License to use software"},
+            },
+            "Litigation & Court": {
+                "Legal Brief / Motion": {"icon": "⚖️", "desc": "Court filings and briefs"},
+                "Settlement Agreement": {"icon": "⚖️", "desc": "Resolve legal disputes"},
+                "Retainer Agreement (Legal Services)": {"icon": "👔", "desc": "Attorney-client engagement"},
+            },
+            "Financial & Investment": {
+                "Promissory Note": {"icon": "💵", "desc": "Written promise to pay"},
+                "Loan Agreement": {"icon": "🏦", "desc": "Comprehensive loan contract"},
+                "Investment Agreement (SAFE/Convertible Note)": {"icon": "🚀", "desc": "Startup investment documents"},
+            },
+            "General / Other": {
+                "Legal Memorandum": {"icon": "📋", "desc": "Internal legal analysis"},
+                "Corporate Filing": {"icon": "📑", "desc": "Articles, reports, certificates"},
+                "Letter / Correspondence": {"icon": "✉️", "desc": "Legal letters"},
+                "Operating Agreement / LLC": {"icon": "🏢", "desc": "LLC formation and governance"},
+                "Power of Attorney": {"icon": "🖋️", "desc": "Grant authority to act"},
+                "Arbitration Agreement": {"icon": "🤝", "desc": "Binding arbitration terms"},
+                "Website Terms of Service": {"icon": "🌐", "desc": "Legal terms for website"},
+                "Custom Document": {"icon": "✏️", "desc": "Describe your custom needs"},
+            },
+        }
+
+        # Filter documents based on search query
+        if search_query:
+            filtered_catalog = {}
+            query_lower = search_query.lower()
+            for category, docs in doc_types_catalog.items():
+                matching_docs = {
+                    name: info for name, info in docs.items()
+                    if query_lower in name.lower() or query_lower in info['desc'].lower()
+                }
+                if matching_docs:
+                    filtered_catalog[category] = matching_docs
+        else:
+            filtered_catalog = doc_types_catalog
+
+        # Display categorized document grid
+        if not filtered_catalog:
+            st.warning(f"No document types found matching '{search_query}'. Try a different search term.")
+        else:
+            for category, documents in filtered_catalog.items():
+                st.markdown(f"""
+                <div style="margin-top: 2rem; margin-bottom: 1rem;">
+                    <h4 style="color: var(--primary-navy); border-bottom: 2px solid var(--accent-gold); padding-bottom: 0.5rem;">
+                        {category}
+                    </h4>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Create grid layout (4 columns)
+                cols = st.columns(4)
+                for idx, (doc_name, doc_info) in enumerate(documents.items()):
+                    with cols[idx % 4]:
+                        st.markdown(f"""
+                        <div class="card" style="text-align: center; min-height: 160px; padding: 1.25rem;">
+                            <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">{doc_info['icon']}</div>
+                            <h4 style="margin-bottom: 0.4rem; font-size: 0.9rem; line-height: 1.3;">{doc_name}</h4>
+                            <p style="color: var(--text-secondary); font-size: 0.75rem; margin-bottom: 1rem;">
+                                {doc_info['desc']}
+                            </p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        if st.button("Select", key=f"select_{doc_name.replace(' ', '_').replace('/', '_').replace('(', '').replace(')', '')}", use_container_width=True):
+                            st.session_state.create_doc_type = doc_name
+                            st.session_state.create_doc_type_label = doc_name
+                            # Generate fields dynamically
+                            with st.spinner("Loading template..."):
+                                llm = get_llm()
+                                generator = DocumentGenerator(llm, get_collection(), knowledge_db=get_knowledge_db())
+                                fields = generator.get_required_fields_for_type(doc_name)
+                                st.session_state.create_fields = fields
+                                # Check if this is a learned template
+                                st.session_state.create_is_learned = any(f.get("learned") for f in fields)
+                            st.rerun()
+
+        return
+
+    # Step 2: Field Form (if not generated yet)
+    if "create_generated_text" not in st.session_state:
+        # Check if this is a learned template
+        is_learned = st.session_state.get("create_is_learned", False)
+
+        if is_learned:
+            st.markdown(f"""
+            <div class="success-card">
+                <strong>Document Type:</strong> {st.session_state.create_doc_type_label}<br>
+                📚 <strong>Learned from your document library</strong> — This template was automatically generated from real documents in your knowledge base.
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="info-card">
+                <strong>Document Type:</strong> {st.session_state.create_doc_type_label}
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("### 📋 Document Information")
+        st.caption("Fill in the details below. The AI will use this information to generate your document.")
+
+        # Dynamic form based on LLM-generated fields
+        with st.form("create_doc_form"):
+            form_data = {}
+            fields = st.session_state.create_fields
+
+            # Group fields by category (simple heuristic)
+            for field in fields:
+                key = field.get("key", "field")
+                label = field.get("label", key.title())
+                field_type = field.get("type", "text")
+                placeholder = field.get("placeholder", "")
+                help_text = field.get("help", "")
+
+                if field_type == "date":
+                    form_data[key] = st.date_input(
+                        label,
+                        value=date.today(),
+                        key=f"create_{key}",
+                        help=help_text
+                    )
+                elif field_type == "textarea":
+                    form_data[key] = st.text_area(
+                        label,
+                        placeholder=placeholder,
+                        height=100,
+                        key=f"create_{key}",
+                        help=help_text
+                    )
+                else:
+                    form_data[key] = st.text_input(
+                        label,
+                        placeholder=placeholder,
+                        key=f"create_{key}",
+                        help=help_text
+                    )
+
+            st.divider()
+            submitted = st.form_submit_button(
+                "✨ Generate Document",
+                type="primary",
+                use_container_width=True
+            )
+
+            if submitted:
+                llm = get_llm()
+                if not llm.is_available():
+                    st.error("LLM is not available. Check Settings.")
+                else:
+                    with st.spinner("Generating your document... this may take 30-60 seconds."):
+                        try:
+                            collection = get_collection()
+                            generator = DocumentGenerator(llm, collection, knowledge_db=get_knowledge_db())
+
+                            # Map to standard doc type if possible
+                            doc_type = st.session_state.create_doc_type
+                            if doc_type in DOCUMENT_TYPES:
+                                text = generator.generate(doc_type, form_data, use_sec=False)
+                            else:
+                                # Custom document type — use generic prompt
+                                system_prompt = (
+                                    f"You are a legal document drafting assistant. Generate a professional "
+                                    f"{st.session_state.create_doc_type_label}. Use formal legal language with "
+                                    f"numbered sections. Include standard boilerplate clauses as appropriate. "
+                                    f"This is a draft for attorney review, not legal advice."
+                                )
+                                param_list = "\n".join([f"{k}: {v}" for k, v in form_data.items() if v])
+                                user_prompt = f"Generate a {st.session_state.create_doc_type_label} with:\n\n{param_list}"
+                                text = llm.generate_document(system_prompt, user_prompt)
+
+                            st.session_state.create_generated_text = text
+                            st.session_state.create_chat_messages = []
+                            st.toast("✅ Document generated!", icon="✅")
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(f"Generation failed: {e}")
+
+        return
+
+    # Step 3: Preview & Edit with AI Chat
+    st.markdown(f"""
+    <div class="info-card">
+        <strong>Document Type:</strong> {st.session_state.create_doc_type_label}
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_preview, col_ai = st.columns([3, 2], gap="large")
+
+    with col_preview:
+        st.markdown("""
+        <div class="card-header">
+            📄 Document Preview & Edit
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Editable preview
+        edited_text = st.text_area(
+            "Edit document:",
+            value=st.session_state.create_generated_text,
+            height=500,
+            key="create_preview_area",
+            label_visibility="collapsed"
+        )
+
+        if edited_text != st.session_state.create_generated_text:
+            st.session_state.create_generated_text = edited_text
+
+        # Controls
+        col_regen, col_export, col_new = st.columns([1, 1, 1])
+
+        with col_regen:
+            if st.button("🔄 Start Over", use_container_width=True):
+                st.session_state.pop("create_doc_type", None)
+                st.session_state.pop("create_generated_text", None)
+                st.rerun()
+
+        with col_export:
+            docx_bytes = DocumentGenerator.text_to_docx(
+                st.session_state.create_generated_text,
+                st.session_state.create_doc_type_label
+            )
+            st.download_button(
+                label="⬇️ Download .docx",
+                data=docx_bytes,
+                file_name=f"{st.session_state.create_doc_type_label.replace(' ', '_')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True
+            )
+
+    with col_ai:
+        st.markdown("""
+        <div class="card-header">
+            🤖 AI Assistant
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.caption("Request revisions or changes:")
+
+        # Chat history
+        for msg in st.session_state.get("create_chat_messages", []):
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # Chat input
+        if prompt := st.chat_input("E.g., 'Add a termination clause' or 'Make the payment terms clearer'"):
+            if "create_chat_messages" not in st.session_state:
+                st.session_state.create_chat_messages = []
+
+            st.session_state.create_chat_messages.append({"role": "user", "content": prompt})
+
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            with st.chat_message("assistant"):
+                with st.spinner("AI is revising..."):
+                    llm = get_llm()
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a legal document editing assistant. Apply the user's requested "
+                                "changes and return the FULL updated document."
+                            )
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Current document:\n\n{st.session_state.create_generated_text}\n\n"
+                                f"User request: {prompt}\n\n"
+                                "Provide the full updated document."
+                            )
+                        }
+                    ]
+
+                    try:
+                        response = llm.chat(messages, temperature=0.2, max_tokens=4096)
+                        st.session_state.create_generated_text = response
+                        st.markdown("✅ Changes applied!")
+                        st.session_state.create_chat_messages.append({
+                            "role": "assistant",
+                            "content": "✅ Changes applied!"
+                        })
+                        st.rerun()
+                    except Exception as e:
+                        error_msg = f"Error: {str(e)}"
+                        st.error(error_msg)
+                        st.session_state.create_chat_messages.append({
+                            "role": "assistant",
+                            "content": error_msg
+                        })
+
+
+# ======================================================================
+# Settings Page (Accessed from Sidebar)
+# ======================================================================
+
+def render_settings_page():
+    """Render the full settings page."""
+
+    # Back button
+    if st.button("← Back", key="back_from_settings"):
+        st.session_state.show_settings = False
+        st.rerun()
+
+    st.markdown("""
+    <div class="card-header">
+        ⚙️ Settings
+    </div>
+    """, unsafe_allow_html=True)
+
+    current_user = st.session_state.current_user
+
+    # Create tabs for different settings sections
+    settings_tab1, settings_tab2, settings_tab3 = st.tabs([
+        "🤖 LLM Provider",
+        "👤 Profile",
+        "👥 Admin" if current_user.is_admin() else "ℹ️ Info"
+    ])
+
+    # LLM Provider Settings
+    with settings_tab1:
+        st.markdown("""
+        <div class="info-card">
+            The AI language model powers document generation and editing. Choose your preferred provider.
+        </div>
+        """, unsafe_allow_html=True)
+
+        provider = st.radio(
+            "Select AI Provider",
+            options=["ollama", "openai"],
+            format_func=lambda p: "🏠 Ollama (Free, runs locally)" if p == "ollama" else "☁️ OpenAI (Cloud-based, paid API)",
+            index=0 if st.session_state.llm_provider == "ollama" else 1,
+            key="settings_provider",
+        )
+
+        if provider == "ollama":
+            st.markdown("#### Ollama Configuration")
+            base_url = st.text_input(
+                "Ollama API URL",
+                value=st.session_state.llm_base_url,
+                key="settings_base_url",
+                help="Default: http://localhost:11434/v1"
+            )
+            tmp_llm = LLMBackend(provider="ollama", base_url=base_url)
+            models = tmp_llm.list_models()
+            if models:
+                model = st.selectbox(
+                    "Select Model",
+                    options=models,
+                    index=models.index(st.session_state.llm_model)
+                    if st.session_state.llm_model in models
+                    else 0,
+                    key="settings_model_select",
+                )
+                st.success(f"✅ Connected • {len(models)} model(s) available")
+            else:
+                model = st.text_input(
+                    "Model name",
+                    value=st.session_state.llm_model,
+                    key="settings_model_text",
+                    placeholder="llama3.1:8b"
+                )
+                st.error("❌ Could not connect to Ollama. Make sure it's running.")
+        else:
+            st.markdown("#### OpenAI Configuration")
+            api_key = st.text_input(
+                "OpenAI API Key",
+                value=st.session_state.openai_api_key if st.session_state.openai_api_key not in ["", "your-api-key-here"] else "",
+                type="password",
+                key="settings_openai_key",
+                placeholder="sk-proj-..."
+            )
+            model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"]
+            current_model = st.session_state.llm_model if st.session_state.llm_provider == "openai" else "gpt-4o-mini"
+            model = st.selectbox(
+                "Model",
+                options=model_options,
+                index=model_options.index(current_model) if current_model in model_options else 0,
+                key="settings_openai_model",
+            )
+            base_url = "https://api.openai.com/v1"
+
+            if api_key and api_key.startswith("sk-") and len(api_key) > 20:
+                st.success("✅ API key format looks valid")
+
+        if st.button("💾 Save Settings", type="primary", use_container_width=True):
+            st.session_state.llm_provider = provider
+            st.session_state.llm_model = model
+            st.session_state.llm_base_url = base_url
+            if provider == "openai":
+                st.session_state.openai_api_key = api_key
+            st.toast("✅ Settings saved!", icon="✅")
+            st.success("AI provider settings saved successfully.")
+            st.rerun()
+
+    # Profile Settings
+    with settings_tab2:
+        render_profile_settings(auth_manager, current_user)
+
+    # Admin Panel or Info
+    with settings_tab3:
+        if current_user.is_admin():
+            render_admin_panel(auth_manager, current_user)
+        else:
+            st.markdown("""
+            <div class="info-card">
+                <strong>Corporate Law Document Generator</strong><br><br>
+                You are logged in as a regular user.<br>
+                Contact an administrator for account-related requests.
+            </div>
+            """, unsafe_allow_html=True)
+
+
+# ======================================================================
+# Knowledge Base Page
+# ======================================================================
+
+def render_knowledge_base_page():
+    """Render the Knowledge Base management page."""
+
+    # Back button
+    if st.button("← Back", key="back_from_kb"):
+        st.session_state.show_knowledge_base = False
+        st.rerun()
+
+    st.markdown("""
+    <div class="card-header">
+        📚 Knowledge Base & Continuous Learning
+    </div>
+    """, unsafe_allow_html=True)
+
+    knowledge_db = get_knowledge_db()
+    stats = knowledge_db.get_stats()
+
+    # Overview stats
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("Documents Indexed", stats["total_documents"])
+
+    with col2:
+        st.metric("Document Types", stats["document_types"])
+
+    with col3:
+        st.metric("Total Scans", stats["total_scans"])
+
+    with col4:
+        if stats["last_scan"]:
+            try:
+                import dateutil.parser
+                import datetime
+                last_scan = dateutil.parser.parse(stats["last_scan"])
+                time_ago = datetime.datetime.now(datetime.timezone.utc) - last_scan
+                hours_ago = int(time_ago.total_seconds() / 3600)
+                st.metric("Last Scan", f"{hours_ago}h ago")
+            except:
+                st.metric("Last Scan", "Recently")
+        else:
+            st.metric("Last Scan", "Never")
+
+    st.divider()
+
+    # Tabs for different sections
+    kb_tab1, kb_tab2, kb_tab3, kb_tab4 = st.tabs([
+        "📖 Learned Templates",
+        "📁 Indexed Documents",
+        "⚙️ Scanner Settings",
+        "📊 Scan History"
+    ])
+
+    # Tab 1: Learned Templates
+    with kb_tab1:
+        st.markdown("### Learned Document Templates")
+        st.caption("Templates automatically learned from your real documents")
+
+        doc_types = knowledge_db.get_all_document_types()
+
+        if not doc_types:
+            st.info("No learned templates yet. Run a scan to build templates from your documents.")
+        else:
+            for type_info in doc_types:
+                doc_type = type_info["type"]
+                count = type_info["count"]
+
+                with st.expander(f"📄 {doc_type} — Learned from {count} documents"):
+                    learned = knowledge_db.get_learned_template(doc_type)
+
+                    if learned:
+                        st.caption(f"Last updated: {learned['last_updated']}")
+
+                        st.markdown("**Learned Fields:**")
+                        for field in learned["fields"]:
+                            confidence = field.get("confidence", 0)
+                            frequency = field.get("frequency", 0)
+                            bar_color = "🟢" if confidence >= 0.7 else "🟡" if confidence >= 0.5 else "🔴"
+                            st.markdown(
+                                f"{bar_color} **{field['label']}** — "
+                                f"{confidence*100:.0f}% confidence ({frequency}/{count} documents)"
+                            )
+
+    # Tab 2: Indexed Documents
+    with kb_tab2:
+        st.markdown("### Indexed Documents by Type")
+
+        if not doc_types:
+            st.info("No documents indexed yet.")
+        else:
+            selected_type = st.selectbox(
+                "Select document type to view:",
+                options=[t["type"] for t in doc_types],
+                key="kb_doc_type_select"
+            )
+
+            if selected_type:
+                files = knowledge_db.get_scanned_files_by_type(selected_type)
+
+                st.caption(f"Found {len(files)} documents")
+
+                for file_info in files[:50]:  # Limit display to 50
+                    file_name = os.path.basename(file_info["file_path"])
+                    file_size_kb = file_info["file_size"] / 1024
+
+                    col_a, col_b, col_c = st.columns([3, 1, 1])
+                    with col_a:
+                        st.markdown(f"**{file_name}**")
+                    with col_b:
+                        st.caption(f"{file_size_kb:.1f} KB")
+                    with col_c:
+                        st.caption(file_info["scan_date"][:10])
+
+    # Tab 3: Scanner Settings
+    with kb_tab3:
+        st.markdown("### Scanner Configuration")
+
+        scanner = ScannerManager.get_instance()
+        if scanner:
+            status = scanner.get_status()
+
+            st.markdown("#### Status")
+            if status["is_running"]:
+                st.success("✅ Scanner is running")
+
+                if status.get("current_progress"):
+                    prog = status["current_progress"]
+                    st.progress(prog["current"] / max(prog["total"], 1))
+                    st.caption(f"Processing: {prog['file']}")
+                    st.caption(f"{prog['current']} / {prog['total']} files")
+            else:
+                st.warning("⚠️ Scanner is stopped")
+
+            st.divider()
+
+            st.markdown("#### Scan Paths")
+            scan_paths = status.get("scan_paths", [])
+            for path in scan_paths:
+                exists = os.path.exists(path)
+                icon = "✅" if exists else "❌"
+                st.markdown(f"{icon} `{path}`")
+
+            st.divider()
+
+            st.markdown("#### Manual Controls")
+
+            col_a, col_b, col_c = st.columns(3)
+
+            with col_a:
+                if st.button("🔍 Scan Now", type="primary", use_container_width=True):
+                    scanner.trigger_scan()
+                    st.toast("Scan triggered!", icon="🔍")
+                    st.rerun()
+
+            with col_b:
+                if status["is_running"]:
+                    if st.button("⏸️ Stop Scanner", use_container_width=True):
+                        scanner.stop()
+                        st.toast("Scanner stopped", icon="⏸️")
+                        st.rerun()
+                else:
+                    if st.button("▶️ Start Scanner", use_container_width=True):
+                        scanner.start()
+                        st.toast("Scanner started", icon="▶️")
+                        st.rerun()
+
+            with col_c:
+                if st.button("🔄 Rebuild Templates", use_container_width=True):
+                    with st.spinner("Rebuilding learned templates..."):
+                        llm = get_llm()
+                        collection = get_collection()
+                        scanner_instance = DocumentScanner(
+                            llm=llm,
+                            chroma_collection=collection,
+                            knowledge_db=knowledge_db
+                        )
+                        scanner_instance.build_learned_templates()
+                        st.success("Templates rebuilt!")
+                        st.rerun()
+
+            st.divider()
+
+            st.markdown("#### Advanced Settings")
+
+            new_interval = st.number_input(
+                "Scan interval (minutes)",
+                min_value=5,
+                max_value=1440,
+                value=status.get("scan_interval_minutes", 30),
+                key="kb_scan_interval"
+            )
+
+            if st.button("Update Interval", key="update_scan_interval"):
+                # This would require updating the scanner config
+                st.info("Restart the scanner for the new interval to take effect")
+
+        else:
+            st.error("Background scanner not initialized")
+
+    # Tab 4: Scan History
+    with kb_tab4:
+        st.markdown("### Recent Scan History")
+
+        history = knowledge_db.get_scan_history(limit=20)
+
+        if not history:
+            st.info("No scan history yet.")
+        else:
+            for scan in history:
+                status_icon = "✅" if scan["status"] == "completed" else "⏳"
+
+                with st.expander(f"{status_icon} Scan on {scan['scan_start'][:10]}"):
+                    col_a, col_b, col_c = st.columns(3)
+
+                    with col_a:
+                        st.metric("Scanned", scan["files_scanned"])
+                    with col_b:
+                        st.metric("Indexed", scan["files_indexed"])
+                    with col_c:
+                        st.metric("Failed", scan["files_failed"])
+
+                    if scan["scan_end"]:
+                        try:
+                            import dateutil.parser
+                            start = dateutil.parser.parse(scan["scan_start"])
+                            end = dateutil.parser.parse(scan["scan_end"])
+                            duration = (end - start).total_seconds()
+                            st.caption(f"Duration: {duration:.0f} seconds")
+                        except:
+                            pass
+
+                    if scan.get("errors"):
+                        st.markdown("**Errors:**")
+                        st.text(scan["errors"])
+
+
+# ======================================================================
 # Main Application
 # ======================================================================
 
@@ -1372,14 +2360,13 @@ def main():
             st.session_state.onboarding_complete = True
 
     # Render header
-    subtitle_provider = st.session_state.llm_provider.title()
     render_header(
         title="Corporate Law Document Generator",
         subtitle=f"AI-powered legal document generation and knowledge base",
         user_info=current_user.to_dict()
     )
 
-    # Check LLM availability and show clear instructions if not configured
+    # Check LLM availability
     llm = get_llm()
     if not llm.is_available():
         if st.session_state.llm_provider == "ollama":
@@ -1392,7 +2379,7 @@ def main():
                 2. Open a terminal and run: <code>ollama serve</code><br>
                 3. Pull a model: <code>ollama pull llama3.1:8b</code><br>
                 4. Refresh this page<br><br>
-                <strong>Or:</strong> Switch to OpenAI in the <strong>Settings</strong> tab
+                <strong>Or:</strong> Click the gear icon in the sidebar to switch to OpenAI
             </div>
             """, unsafe_allow_html=True)
         else:
@@ -1404,30 +2391,44 @@ def main():
                 1. Go to <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a><br>
                 2. Sign up or log in<br>
                 3. Create a new API key<br>
-                4. Go to <strong>Settings</strong> → <strong>LLM Provider</strong> tab<br>
+                4. Click the gear icon in the sidebar → <strong>LLM Provider</strong><br>
                 5. Enter your API key and click Save<br><br>
                 <strong>Or:</strong> Install and use Ollama locally (free)
             </div>
             """, unsafe_allow_html=True)
 
-    # Render sidebar
+    # Initialize background scanner (cached)
+    try:
+        knowledge_db = get_knowledge_db()
+        collection = get_collection()
+        scanner = get_background_scanner(llm, collection, knowledge_db)
+    except Exception as e:
+        logger.error(f"Failed to initialize background scanner: {e}")
+        scanner = None
+
+    # Render sidebar with Settings access
     render_sidebar()
 
-    # Main content tabs
-    tab_chat, tab_generate, tab_settings = st.tabs([
-        "💬 Chat Q&A",
-        "📝 Generate Document",
-        "⚙️ Settings"
-    ])
+    # Check if settings page should be shown
+    if st.session_state.get("show_settings"):
+        render_settings_page()
+        return
 
-    with tab_chat:
-        render_chat_tab()
+    # Check if knowledge base page should be shown
+    if st.session_state.get("show_knowledge_base"):
+        render_knowledge_base_page()
+        return
 
-    with tab_generate:
-        render_generate_tab()
+    # Main workflow routing
+    workflow_mode = st.session_state.get("workflow_mode")
 
-    with tab_settings:
-        render_settings_tab()
+    if workflow_mode == "edit":
+        render_edit_workflow()
+    elif workflow_mode == "create":
+        render_create_workflow()
+    else:
+        # Show landing page
+        render_landing_page()
 
     # Render footer
     render_footer()

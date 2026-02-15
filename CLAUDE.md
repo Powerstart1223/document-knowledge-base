@@ -42,12 +42,13 @@ docker compose up --build
 ## Architecture
 
 ### Entry point
-`streamlit_app.py` — authenticated multi-user Streamlit app with modern UI:
+`streamlit_app.py` — authenticated multi-user Streamlit app with modern two-path workflow:
 - **Authentication**: Login/registration pages with secure bcrypt password hashing, session management
-- **Tab 1 — Chat Q&A**: RAG over user's uploaded documents using ChromaDB vector search + LLM
-- **Tab 2 — Generate Document**: Select type (contract/memo/brief/filing), fill form, optionally pull SEC EDGAR / NetDocuments data, generate via LLM, preview, download as .docx
-- **Tab 3 — Settings**: Sub-tabs for LLM provider config, user profile management, external integrations, and admin panel (admin users only)
-- **Sidebar**: User info badge, logout button, file upload with document-type tag selector, per-user database stats, connection status indicators
+- **Landing Page**: Two main workflow cards presented after login:
+  - **Path A — Edit Existing Document**: Upload → Preview → AI-assisted editing via chat → Download
+  - **Path B — Create New Document**: Document type selection → AI-generated dynamic field discovery → Form filling → Generation → AI-assisted editing via chat → Download
+- **Settings** (accessed via sidebar gear icon): LLM provider config, user profile management, admin panel (admin users only)
+- **Sidebar**: User info badge, logout button, settings access, connection status indicators
 
 ### Core modules
 - `llm_backend.py` — `LLMBackend` class. Uses `openai>=1.0` client pointed at Ollama's OpenAI-compatible endpoint (`http://localhost:11434/v1`). Supports Ollama and OpenAI with the same interface. Passes `num_ctx=8192` via `extra_body` for Ollama to extend the default 2048-token context.
@@ -82,10 +83,17 @@ docker compose up --build
 
 ### Data flow
 1. **Authentication**: User logs in (or registers) → session created with `current_user` in session state
-2. User uploads documents via sidebar, selects a document type tag (contract/memo/brief/filing/reference)
-3. Text extracted (PDF, DOCX, TXT) → chunked → stored in **per-user ChromaDB collection** (`user_{user_id}_documents`) with `document_type` and `user_id` metadata
-4. **Chat Q&A**: query → top-5 chunks from user's collection → context + question → LLM → answer with sources
-5. **Document generation**: select type → fill form → retrieve style examples (from user's collection, filtered by type) → optionally fetch SEC EDGAR / NetDocuments reference data → build prompt → LLM generates document → preview + download as .docx
+2. **Landing Page**: User selects workflow (Edit Existing or Create New)
+3. **Path A — Edit Existing**:
+   - Upload document → text extraction → editable preview
+   - User chats with AI to request changes → LLM applies changes → updated preview
+   - Version history tracks all changes → undo support
+   - Download edited document as .docx
+4. **Path B — Create New**:
+   - Select document type from grid → LLM generates required fields dynamically
+   - User fills form → LLM generates complete document
+   - Editable preview with AI chat for revisions → download as .docx
+5. **Settings**: Accessible via sidebar, configure LLM provider (Ollama/OpenAI), manage profile, admin panel (admin-only)
 
 ### Storage
 - `users.db` — SQLite database with user accounts (email, password_hash, role, etc.) — **gitignored**

@@ -21,6 +21,7 @@ from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from llm_backend import LLMBackend
+from extended_document_types import ADDITIONAL_DOCUMENT_TYPES
 
 
 # ======================================================================
@@ -135,9 +136,10 @@ DOCUMENT_TYPES: dict[str, dict] = {
 class DocumentGenerator:
     """End-to-end generation pipeline: examples -> ref data -> prompt -> LLM -> text."""
 
-    def __init__(self, llm: LLMBackend, chroma_collection=None):
+    def __init__(self, llm: LLMBackend, chroma_collection=None, knowledge_db=None):
         self.llm = llm
         self.collection = chroma_collection
+        self.knowledge_db = knowledge_db  # Optional: for learned templates
 
     # -- Document Analysis (for Mimic workflow) --------------------------
 
@@ -252,13 +254,301 @@ Generate a complete {analysis.get('document_subtype', 'document')} following the
     def get_required_fields_for_type(self, document_type: str) -> list[dict]:
         """
         Ask the LLM what fields are typically needed for a document type.
+        First checks learned templates from real documents, then falls back to predefined.
         Returns a list of field definitions.
         """
+        # PRIORITY 1: Check if we have a learned template from real documents
+        if self.knowledge_db:
+            try:
+                learned = self.knowledge_db.get_learned_template(document_type)
+                if learned and learned.get("sample_count", 0) >= 3:  # Require at least 3 samples
+                    # Use learned template
+                    fields = learned["fields"]
+                    # Add metadata to indicate these are learned
+                    for field in fields:
+                        field["learned"] = True
+                        field["sample_count"] = learned["sample_count"]
+                    return fields
+            except Exception as e:
+                # Fall through to hardcoded templates
+                pass
+
+        # PRIORITY 2: Enhanced predefined templates for common document types
+        EXTENDED_DOCUMENT_TYPES = {
+            "Independent Contractor Agreement": [
+                {"key": "company_name", "label": "Company Name", "type": "text", "placeholder": "ABC Corp", "help": "Hiring company's legal name"},
+                {"key": "contractor_name", "label": "Contractor Name", "type": "text", "placeholder": "John Doe", "help": "Independent contractor's full name"},
+                {"key": "contractor_address", "label": "Contractor Address", "type": "text", "placeholder": "123 Main St, City, State", "help": "Contractor's address"},
+                {"key": "services", "label": "Services Description", "type": "textarea", "placeholder": "Describe the services to be performed", "help": "Detailed description of work"},
+                {"key": "compensation", "label": "Compensation Amount", "type": "text", "placeholder": "$5,000", "help": "Total payment or rate"},
+                {"key": "payment_terms", "label": "Payment Terms", "type": "textarea", "placeholder": "Net 30 days, monthly invoicing", "help": "When and how payment is made"},
+                {"key": "start_date", "label": "Start Date", "type": "date", "help": "Contract start date"},
+                {"key": "end_date", "label": "End Date (if applicable)", "type": "date", "help": "Contract end date"},
+                {"key": "ip_assignment", "label": "Intellectual Property Assignment", "type": "text", "placeholder": "Yes/No", "help": "Will contractor IP belong to company?"},
+                {"key": "confidentiality", "label": "Confidentiality Requirements", "type": "textarea", "placeholder": "Describe confidentiality obligations", "help": "NDA and confidentiality terms"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of California", "help": "Which state's laws apply"},
+                {"key": "termination", "label": "Termination Notice Period", "type": "text", "placeholder": "30 days", "help": "Notice required to terminate"},
+            ],
+            "NDA / Confidentiality Agreement": [
+                {"key": "disclosing_party", "label": "Disclosing Party", "type": "text", "placeholder": "ABC Corp", "help": "Party sharing confidential information"},
+                {"key": "receiving_party", "label": "Receiving Party", "type": "text", "placeholder": "XYZ LLC", "help": "Party receiving confidential information"},
+                {"key": "purpose", "label": "Purpose", "type": "textarea", "placeholder": "Evaluation of potential business relationship", "help": "Reason for sharing information"},
+                {"key": "effective_date", "label": "Effective Date", "type": "date", "help": "When the NDA becomes effective"},
+                {"key": "term", "label": "Term / Duration", "type": "text", "placeholder": "2 years", "help": "How long confidentiality lasts"},
+                {"key": "definition", "label": "Confidential Information Definition", "type": "textarea", "placeholder": "All technical, business, financial information...", "help": "What is considered confidential"},
+                {"key": "exceptions", "label": "Exceptions (optional)", "type": "textarea", "placeholder": "Information already public, independently developed...", "help": "What is NOT confidential"},
+                {"key": "return_obligation", "label": "Return of Materials", "type": "text", "placeholder": "Yes/No", "help": "Must materials be returned?"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of Delaware", "help": "Which jurisdiction applies"},
+            ],
+            "Employment Agreement": [
+                {"key": "employer_name", "label": "Employer Name", "type": "text", "placeholder": "ABC Company Inc.", "help": "Employer's legal name"},
+                {"key": "employee_name", "label": "Employee Name", "type": "text", "placeholder": "Jane Smith", "help": "Employee's full legal name"},
+                {"key": "position", "label": "Position / Title", "type": "text", "placeholder": "Senior Software Engineer", "help": "Job title"},
+                {"key": "start_date", "label": "Start Date", "type": "date", "help": "Employment start date"},
+                {"key": "salary", "label": "Annual Salary", "type": "text", "placeholder": "$120,000", "help": "Annual compensation"},
+                {"key": "benefits", "label": "Benefits", "type": "textarea", "placeholder": "Health insurance, 401(k), PTO...", "help": "Employee benefits package"},
+                {"key": "duties", "label": "Duties & Responsibilities", "type": "textarea", "placeholder": "Primary job responsibilities", "help": "What the employee will do"},
+                {"key": "work_location", "label": "Work Location", "type": "text", "placeholder": "San Francisco, CA / Remote", "help": "Where work is performed"},
+                {"key": "at_will", "label": "At-Will Employment", "type": "text", "placeholder": "Yes/No", "help": "Is this at-will employment?"},
+                {"key": "confidentiality", "label": "Confidentiality Clause", "type": "text", "placeholder": "Yes/No", "help": "Include confidentiality obligations?"},
+                {"key": "non_compete", "label": "Non-Compete Clause", "type": "text", "placeholder": "Yes/No", "help": "Include non-compete?"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of California", "help": "Which state's laws apply"},
+            ],
+            "Operating Agreement / LLC": [
+                {"key": "llc_name", "label": "LLC Name", "type": "text", "placeholder": "ABC Services LLC", "help": "Legal name of the LLC"},
+                {"key": "state", "label": "State of Formation", "type": "text", "placeholder": "Delaware", "help": "State where LLC is formed"},
+                {"key": "formation_date", "label": "Formation Date", "type": "date", "help": "Date LLC was formed"},
+                {"key": "members", "label": "Members", "type": "textarea", "placeholder": "John Doe (50%), Jane Smith (50%)", "help": "List all members and ownership %"},
+                {"key": "purpose", "label": "Business Purpose", "type": "textarea", "placeholder": "Provide consulting services", "help": "Purpose of the LLC"},
+                {"key": "management", "label": "Management Type", "type": "text", "placeholder": "Member-managed / Manager-managed", "help": "How is the LLC managed?"},
+                {"key": "capital", "label": "Initial Capital Contributions", "type": "textarea", "placeholder": "Member contributions and amounts", "help": "Initial capital each member contributes"},
+                {"key": "distributions", "label": "Distribution Terms", "type": "textarea", "placeholder": "Pro-rata based on ownership", "help": "How profits are distributed"},
+                {"key": "voting", "label": "Voting Rights", "type": "textarea", "placeholder": "Majority vote required", "help": "How decisions are made"},
+                {"key": "transfer", "label": "Transfer Restrictions", "type": "textarea", "placeholder": "Right of first refusal", "help": "Can members sell their interest?"},
+            ],
+            "Letter / Correspondence": [
+                {"key": "sender", "label": "Sender Name", "type": "text", "placeholder": "John Doe, Esq.", "help": "Who is sending the letter"},
+                {"key": "recipient", "label": "Recipient Name", "type": "text", "placeholder": "Jane Smith", "help": "Who is receiving the letter"},
+                {"key": "date", "label": "Date", "type": "date", "help": "Date of the letter"},
+                {"key": "subject", "label": "Subject / Re:", "type": "text", "placeholder": "Regarding Contract Dispute", "help": "Subject line"},
+                {"key": "body", "label": "Letter Content", "type": "textarea", "placeholder": "Main content of the letter", "help": "What do you want to communicate?"},
+                {"key": "tone", "label": "Tone", "type": "text", "placeholder": "Formal / Friendly / Stern", "help": "Desired tone of the letter"},
+                {"key": "action", "label": "Desired Action", "type": "textarea", "placeholder": "Request payment within 10 days", "help": "What action do you want the recipient to take?"},
+            ],
+            "Custom Document": [
+                {"key": "document_description", "label": "Document Description", "type": "textarea", "placeholder": "Describe the type of document you need", "help": "What kind of document do you want to create?", "required": True},
+                {"key": "parties", "label": "Parties Involved", "type": "textarea", "placeholder": "Who are the parties?", "help": "List all parties involved"},
+                {"key": "key_terms", "label": "Key Terms & Details", "type": "textarea", "placeholder": "What are the important terms, conditions, or details?", "help": "Main content and requirements"},
+                {"key": "special_provisions", "label": "Special Provisions (optional)", "type": "textarea", "placeholder": "Any specific clauses or provisions needed?", "help": "Additional requirements"},
+            ],
+            # ===== CORPORATE & BUSINESS =====
+            "Shareholder Agreement": [
+                {"key": "company_name", "label": "Company Name", "type": "text", "placeholder": "ABC Corporation", "help": "Legal name of the corporation"},
+                {"key": "shareholders", "label": "Shareholders", "type": "textarea", "placeholder": "John Doe (40%), Jane Smith (35%), Bob Johnson (25%)", "help": "List all shareholders and their ownership percentages"},
+                {"key": "formation_date", "label": "Company Formation Date", "type": "date", "help": "Date the company was incorporated"},
+                {"key": "share_class", "label": "Share Class", "type": "text", "placeholder": "Common Stock, Class A", "help": "Type of shares covered"},
+                {"key": "voting_rights", "label": "Voting Rights", "type": "textarea", "placeholder": "One vote per share, majority required for major decisions", "help": "How voting is structured"},
+                {"key": "transfer_restrictions", "label": "Share Transfer Restrictions", "type": "textarea", "placeholder": "Right of first refusal, board approval required", "help": "Restrictions on selling or transferring shares"},
+                {"key": "drag_along", "label": "Drag-Along Rights", "type": "text", "placeholder": "Yes/No", "help": "Can majority force minority to sell?"},
+                {"key": "tag_along", "label": "Tag-Along Rights", "type": "text", "placeholder": "Yes/No", "help": "Can minority join a sale?"},
+                {"key": "dividend_policy", "label": "Dividend Policy", "type": "textarea", "placeholder": "Distributed quarterly, pro-rata based on ownership", "help": "How profits are distributed"},
+                {"key": "dispute_resolution", "label": "Dispute Resolution", "type": "textarea", "placeholder": "Mediation then arbitration", "help": "How disputes are resolved"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of Delaware", "help": "Which jurisdiction's laws apply"},
+            ],
+            "Partnership Agreement": [
+                {"key": "partnership_name", "label": "Partnership Name", "type": "text", "placeholder": "Smith & Associates Partnership", "help": "Legal name of the partnership"},
+                {"key": "partners", "label": "Partners", "type": "textarea", "placeholder": "Partner names and ownership percentages", "help": "List all partners with ownership stakes"},
+                {"key": "business_purpose", "label": "Business Purpose", "type": "textarea", "placeholder": "Professional consulting services", "help": "Primary purpose of the partnership"},
+                {"key": "start_date", "label": "Start Date", "type": "date", "help": "When the partnership begins"},
+                {"key": "capital_contributions", "label": "Capital Contributions", "type": "textarea", "placeholder": "Initial capital and ongoing contribution requirements", "help": "How much each partner contributes"},
+                {"key": "profit_distribution", "label": "Profit Distribution", "type": "textarea", "placeholder": "Distributed based on ownership percentage", "help": "How profits and losses are shared"},
+                {"key": "decision_making", "label": "Decision Making Authority", "type": "textarea", "placeholder": "Unanimous for major decisions, majority for day-to-day", "help": "How decisions are made"},
+                {"key": "management_duties", "label": "Management Duties", "type": "textarea", "placeholder": "Roles and responsibilities of each partner", "help": "Who does what"},
+                {"key": "withdrawal", "label": "Withdrawal Terms", "type": "textarea", "placeholder": "90-day notice, buyout at fair market value", "help": "How a partner can exit"},
+                {"key": "dissolution", "label": "Dissolution Terms", "type": "textarea", "placeholder": "Conditions for dissolution and asset distribution", "help": "How partnership can be dissolved"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of New York", "help": "Applicable jurisdiction"},
+            ],
+            "Stock Purchase Agreement": [
+                {"key": "seller", "label": "Seller Name", "type": "text", "placeholder": "John Doe", "help": "Party selling the stock"},
+                {"key": "buyer", "label": "Buyer Name", "type": "text", "placeholder": "Jane Smith", "help": "Party purchasing the stock"},
+                {"key": "company_name", "label": "Company Name", "type": "text", "placeholder": "ABC Corporation", "help": "Company whose stock is being sold"},
+                {"key": "shares_quantity", "label": "Number of Shares", "type": "number", "placeholder": "10000", "help": "Total shares being sold"},
+                {"key": "share_class", "label": "Share Class", "type": "text", "placeholder": "Common Stock", "help": "Type of shares"},
+                {"key": "purchase_price", "label": "Total Purchase Price", "type": "text", "placeholder": "$500,000", "help": "Total amount buyer will pay"},
+                {"key": "price_per_share", "label": "Price Per Share", "type": "text", "placeholder": "$50.00", "help": "Price for each share"},
+                {"key": "payment_terms", "label": "Payment Terms", "type": "textarea", "placeholder": "50% at closing, 50% in 30 days", "help": "How and when payment is made"},
+                {"key": "closing_date", "label": "Closing Date", "type": "date", "help": "When the transaction closes"},
+                {"key": "representations", "label": "Seller Representations", "type": "textarea", "placeholder": "Ownership, authority, no encumbrances", "help": "Seller's promises about the stock"},
+                {"key": "warranties", "label": "Warranties", "type": "textarea", "placeholder": "Stock is validly issued, fully paid, non-assessable", "help": "Guarantees about the stock"},
+                {"key": "conditions", "label": "Closing Conditions", "type": "textarea", "placeholder": "Due diligence completion, regulatory approvals", "help": "What must happen before closing"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of Delaware", "help": "Applicable jurisdiction"},
+            ],
+            "Asset Purchase Agreement": [
+                {"key": "seller", "label": "Seller Name", "type": "text", "placeholder": "ABC Company Inc.", "help": "Party selling the assets"},
+                {"key": "buyer", "label": "Buyer Name", "type": "text", "placeholder": "XYZ Acquisitions LLC", "help": "Party purchasing the assets"},
+                {"key": "assets_description", "label": "Assets Being Sold", "type": "textarea", "placeholder": "Equipment, inventory, intellectual property, customer lists, goodwill", "help": "Detailed description of all assets"},
+                {"key": "excluded_assets", "label": "Excluded Assets", "type": "textarea", "placeholder": "Cash, accounts receivable prior to closing", "help": "What is NOT being sold"},
+                {"key": "purchase_price", "label": "Total Purchase Price", "type": "text", "placeholder": "$1,250,000", "help": "Total amount for all assets"},
+                {"key": "allocation", "label": "Price Allocation", "type": "textarea", "placeholder": "Equipment: $500K, Inventory: $300K, IP: $400K, Goodwill: $50K", "help": "How price is allocated to each asset category"},
+                {"key": "payment_terms", "label": "Payment Terms", "type": "textarea", "placeholder": "Cash at closing", "help": "How buyer will pay"},
+                {"key": "assumed_liabilities", "label": "Assumed Liabilities", "type": "textarea", "placeholder": "Seller's lease obligations, certain contracts", "help": "Which liabilities buyer is taking on"},
+                {"key": "closing_date", "label": "Closing Date", "type": "date", "help": "When transaction closes"},
+                {"key": "transition_assistance", "label": "Transition Assistance", "type": "textarea", "placeholder": "Seller to provide 30 days training and support", "help": "Post-closing support from seller"},
+                {"key": "non_compete", "label": "Non-Compete Terms", "type": "textarea", "placeholder": "Seller shall not compete for 3 years within 50 miles", "help": "Restrictions on seller's future business"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of California", "help": "Applicable jurisdiction"},
+            ],
+            "Merger Agreement": [
+                {"key": "company_a", "label": "First Company", "type": "text", "placeholder": "ABC Corporation", "help": "Name of first merging company"},
+                {"key": "company_b", "label": "Second Company", "type": "text", "placeholder": "XYZ Inc.", "help": "Name of second merging company"},
+                {"key": "surviving_entity", "label": "Surviving Entity", "type": "text", "placeholder": "ABC Corporation", "help": "Which company will survive the merger"},
+                {"key": "merger_type", "label": "Merger Type", "type": "text", "placeholder": "Forward triangular merger", "help": "Structure of the merger"},
+                {"key": "exchange_ratio", "label": "Stock Exchange Ratio", "type": "text", "placeholder": "1.5 shares of ABC for each share of XYZ", "help": "How stocks will be converted"},
+                {"key": "consideration", "label": "Total Consideration", "type": "text", "placeholder": "$10,000,000 cash + stock", "help": "Total value of the merger"},
+                {"key": "closing_date", "label": "Expected Closing Date", "type": "date", "help": "Target date for merger completion"},
+                {"key": "conditions_precedent", "label": "Closing Conditions", "type": "textarea", "placeholder": "Shareholder approval, regulatory clearances, due diligence", "help": "What must happen before merger completes"},
+                {"key": "representations", "label": "Representations and Warranties", "type": "textarea", "placeholder": "Financial accuracy, legal compliance, no material adverse changes", "help": "Promises each company makes"},
+                {"key": "board_composition", "label": "Post-Merger Board Composition", "type": "textarea", "placeholder": "5 members from ABC, 3 from XYZ", "help": "How board will be structured"},
+                {"key": "employee_treatment", "label": "Employee Treatment", "type": "textarea", "placeholder": "All employees retained for 12 months, benefits maintained", "help": "How employees will be handled"},
+                {"key": "termination", "label": "Termination Rights", "type": "textarea", "placeholder": "Material breach, failure to obtain approvals", "help": "When parties can walk away"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of Delaware", "help": "Applicable jurisdiction"},
+            ],
+            "Franchise Agreement": [
+                {"key": "franchisor", "label": "Franchisor Name", "type": "text", "placeholder": "FastFood Brands Inc.", "help": "Company granting the franchise"},
+                {"key": "franchisee", "label": "Franchisee Name", "type": "text", "placeholder": "John Doe", "help": "Individual/entity receiving franchise rights"},
+                {"key": "territory", "label": "Territory", "type": "text", "placeholder": "Downtown Seattle, Washington", "help": "Geographic area of franchise"},
+                {"key": "franchise_fee", "label": "Initial Franchise Fee", "type": "text", "placeholder": "$50,000", "help": "Upfront fee to acquire franchise"},
+                {"key": "royalty_rate", "label": "Royalty Rate", "type": "text", "placeholder": "6% of gross sales", "help": "Ongoing royalty payments"},
+                {"key": "marketing_fee", "label": "Marketing Fee", "type": "text", "placeholder": "2% of gross sales", "help": "Contribution to marketing fund"},
+                {"key": "term", "label": "Initial Term", "type": "text", "placeholder": "10 years", "help": "Length of franchise agreement"},
+                {"key": "renewal", "label": "Renewal Terms", "type": "text", "placeholder": "Two 5-year renewal options", "help": "Ability to extend franchise"},
+                {"key": "training", "label": "Training Requirements", "type": "textarea", "placeholder": "2 weeks initial training at headquarters, ongoing support", "help": "Training franchisor will provide"},
+                {"key": "standards", "label": "Operating Standards", "type": "textarea", "placeholder": "Must follow operations manual, quality standards, brand guidelines", "help": "Requirements franchisee must meet"},
+                {"key": "termination", "label": "Termination Conditions", "type": "textarea", "placeholder": "Material breach, bankruptcy, failure to meet standards", "help": "When franchise can be terminated"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of Illinois", "help": "Applicable jurisdiction"},
+            ],
+            "Consulting Agreement": [
+                {"key": "client", "label": "Client Name", "type": "text", "placeholder": "ABC Corporation", "help": "Company receiving consulting services"},
+                {"key": "consultant", "label": "Consultant Name", "type": "text", "placeholder": "Jane Doe Consulting LLC", "help": "Individual or firm providing services"},
+                {"key": "services", "label": "Services Description", "type": "textarea", "placeholder": "Strategic planning, market analysis, implementation support", "help": "Detailed scope of consulting work"},
+                {"key": "deliverables", "label": "Deliverables", "type": "textarea", "placeholder": "Monthly reports, strategic plan document, presentation to board", "help": "Specific outputs consultant will provide"},
+                {"key": "fee_structure", "label": "Fee Structure", "type": "text", "placeholder": "Hourly rate, fixed fee, or retainer", "help": "How consultant will be paid"},
+                {"key": "compensation", "label": "Compensation Amount", "type": "text", "placeholder": "$200/hour, $50,000 project fee", "help": "Payment amount"},
+                {"key": "payment_terms", "label": "Payment Terms", "type": "text", "placeholder": "Net 15 days from invoice", "help": "When payment is due"},
+                {"key": "expenses", "label": "Expense Reimbursement", "type": "text", "placeholder": "Reasonable pre-approved expenses", "help": "How expenses are handled"},
+                {"key": "start_date", "label": "Start Date", "type": "date", "help": "When consulting engagement begins"},
+                {"key": "end_date", "label": "End Date", "type": "date", "help": "When engagement is expected to end"},
+                {"key": "confidentiality", "label": "Confidentiality Terms", "type": "textarea", "placeholder": "Consultant shall maintain strict confidentiality", "help": "Protection of client information"},
+                {"key": "ip_ownership", "label": "IP Ownership", "type": "text", "placeholder": "Client owns all work product", "help": "Who owns deliverables"},
+                {"key": "termination", "label": "Termination Notice", "type": "text", "placeholder": "30 days written notice", "help": "How agreement can be ended"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of California", "help": "Applicable jurisdiction"},
+            ],
+            "Service Level Agreement (SLA)": [
+                {"key": "provider", "label": "Service Provider", "type": "text", "placeholder": "CloudTech Services Inc.", "help": "Company providing the services"},
+                {"key": "client", "label": "Client", "type": "text", "placeholder": "ABC Corporation", "help": "Company receiving services"},
+                {"key": "services", "label": "Services Covered", "type": "textarea", "placeholder": "Cloud hosting, database management, technical support", "help": "Which services this SLA covers"},
+                {"key": "uptime_guarantee", "label": "Uptime Guarantee", "type": "text", "placeholder": "99.9% uptime", "help": "Guaranteed availability percentage"},
+                {"key": "response_time", "label": "Response Time", "type": "text", "placeholder": "Critical: 1 hour, High: 4 hours, Normal: 24 hours", "help": "How quickly provider responds to issues"},
+                {"key": "resolution_time", "label": "Resolution Time", "type": "text", "placeholder": "Critical: 4 hours, High: 1 business day, Normal: 3 business days", "help": "Target time to fix issues"},
+                {"key": "support_hours", "label": "Support Hours", "type": "text", "placeholder": "24/7/365 for critical, business hours for normal", "help": "When support is available"},
+                {"key": "monitoring", "label": "Monitoring and Reporting", "type": "textarea", "placeholder": "Real-time monitoring, monthly performance reports", "help": "How performance is tracked"},
+                {"key": "penalties", "label": "Service Credits/Penalties", "type": "textarea", "placeholder": "5% credit for each 0.1% below 99.9% uptime", "help": "Remedies if SLA not met"},
+                {"key": "escalation", "label": "Escalation Procedures", "type": "textarea", "placeholder": "Level 1: Support team, Level 2: Manager, Level 3: VP Operations", "help": "How issues are escalated"},
+                {"key": "maintenance_windows", "label": "Maintenance Windows", "type": "text", "placeholder": "Sunday 2-6 AM EST", "help": "Scheduled downtime periods"},
+                {"key": "term", "label": "SLA Term", "type": "text", "placeholder": "12 months, auto-renewing", "help": "How long SLA is in effect"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of Virginia", "help": "Applicable jurisdiction"},
+            ],
+            "Board Resolution": [
+                {"key": "company_name", "label": "Company Name", "type": "text", "placeholder": "ABC Corporation", "help": "Name of the corporation"},
+                {"key": "meeting_date", "label": "Meeting Date", "type": "date", "help": "Date of board meeting"},
+                {"key": "meeting_type", "label": "Meeting Type", "type": "text", "placeholder": "Regular / Special / Written Consent", "help": "Type of board meeting"},
+                {"key": "attendees", "label": "Directors Present", "type": "textarea", "placeholder": "John Smith (Chair), Jane Doe, Bob Johnson", "help": "Board members attending"},
+                {"key": "quorum", "label": "Quorum Established", "type": "text", "placeholder": "Yes / No", "help": "Was quorum present?"},
+                {"key": "resolution_title", "label": "Resolution Title", "type": "text", "placeholder": "Approval of Annual Budget", "help": "Subject of the resolution"},
+                {"key": "whereas_clauses", "label": "WHEREAS Clauses", "type": "textarea", "placeholder": "Background and reasons for the resolution", "help": "Recitals explaining context"},
+                {"key": "resolved_clauses", "label": "RESOLVED Clauses", "type": "textarea", "placeholder": "Specific actions being authorized", "help": "The actual decisions/actions"},
+                {"key": "vote_result", "label": "Vote Result", "type": "text", "placeholder": "Unanimous / 3 in favor, 0 opposed, 0 abstaining", "help": "Outcome of the vote"},
+                {"key": "authority_granted", "label": "Authority Granted To", "type": "text", "placeholder": "CEO, CFO, Secretary", "help": "Who is authorized to act"},
+                {"key": "effective_date", "label": "Effective Date", "type": "date", "help": "When resolution takes effect"},
+                {"key": "secretary_certification", "label": "Secretary Certification", "type": "textarea", "placeholder": "I hereby certify that the foregoing is a true copy", "help": "Secretary's attestation"},
+            ],
+            # ===== EMPLOYMENT & HR =====
+            "Severance Agreement": [
+                {"key": "employer", "label": "Employer Name", "type": "text", "placeholder": "ABC Corporation", "help": "Company providing severance"},
+                {"key": "employee", "label": "Employee Name", "type": "text", "placeholder": "John Doe", "help": "Employee receiving severance"},
+                {"key": "position", "label": "Employee Position", "type": "text", "placeholder": "Senior Vice President", "help": "Employee's job title"},
+                {"key": "termination_date", "label": "Termination Date", "type": "date", "help": "Last day of employment"},
+                {"key": "severance_pay", "label": "Severance Payment", "type": "text", "placeholder": "12 months base salary ($180,000)", "help": "Cash severance amount"},
+                {"key": "payment_schedule", "label": "Payment Schedule", "type": "text", "placeholder": "Lump sum or monthly installments", "help": "How severance is paid"},
+                {"key": "benefits_continuation", "label": "Benefits Continuation", "type": "textarea", "placeholder": "Health insurance for 12 months, vested stock options exercisable for 90 days", "help": "Ongoing benefits"},
+                {"key": "bonus_treatment", "label": "Bonus Treatment", "type": "text", "placeholder": "Pro-rated annual bonus for time worked", "help": "How bonuses are handled"},
+                {"key": "outplacement", "label": "Outplacement Services", "type": "text", "placeholder": "6 months executive outplacement", "help": "Career transition assistance"},
+                {"key": "release_of_claims", "label": "Release of Claims", "type": "textarea", "placeholder": "Employee releases all claims against employer", "help": "Legal claims employee gives up"},
+                {"key": "non_disparagement", "label": "Non-Disparagement", "type": "text", "placeholder": "Mutual agreement not to make negative statements", "help": "Restrictions on public comments"},
+                {"key": "confidentiality", "label": "Confidentiality", "type": "text", "placeholder": "Terms of agreement remain confidential", "help": "Non-disclosure of severance terms"},
+                {"key": "cooperation", "label": "Post-Termination Cooperation", "type": "textarea", "placeholder": "Reasonable cooperation with transition, litigation", "help": "Ongoing obligations"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of New York", "help": "Applicable jurisdiction"},
+            ],
+            "Offer Letter": [
+                {"key": "company", "label": "Company Name", "type": "text", "placeholder": "ABC Corporation", "help": "Employer offering the position"},
+                {"key": "candidate", "label": "Candidate Name", "type": "text", "placeholder": "Jane Smith", "help": "Person receiving the offer"},
+                {"key": "position", "label": "Position Title", "type": "text", "placeholder": "Senior Software Engineer", "help": "Job title being offered"},
+                {"key": "department", "label": "Department", "type": "text", "placeholder": "Engineering", "help": "Which team/department"},
+                {"key": "reports_to", "label": "Reports To", "type": "text", "placeholder": "VP of Engineering", "help": "Direct supervisor"},
+                {"key": "start_date", "label": "Start Date", "type": "date", "help": "Expected first day of work"},
+                {"key": "salary", "label": "Annual Salary", "type": "text", "placeholder": "$150,000", "help": "Base annual compensation"},
+                {"key": "bonus", "label": "Bonus Opportunity", "type": "text", "placeholder": "15% annual target bonus", "help": "Variable compensation"},
+                {"key": "equity", "label": "Equity Grant", "type": "text", "placeholder": "50,000 stock options, 4-year vesting", "help": "Stock options or RSUs"},
+                {"key": "benefits", "label": "Benefits Summary", "type": "textarea", "placeholder": "Health, dental, vision, 401k matching, PTO", "help": "Employee benefits package"},
+                {"key": "work_location", "label": "Work Location", "type": "text", "placeholder": "San Francisco, CA (Hybrid)", "help": "Where work will be performed"},
+                {"key": "employment_type", "label": "Employment Type", "type": "text", "placeholder": "Full-time, At-Will", "help": "Employment classification"},
+                {"key": "contingencies", "label": "Offer Contingencies", "type": "textarea", "placeholder": "Background check, reference verification, I-9 verification", "help": "Conditions that must be met"},
+                {"key": "expiration", "label": "Offer Expiration", "type": "date", "help": "Deadline to accept offer"},
+            ],
+            "Non-Compete Agreement": [
+                {"key": "employer", "label": "Employer Name", "type": "text", "placeholder": "ABC Corporation", "help": "Company being protected"},
+                {"key": "employee", "label": "Employee Name", "type": "text", "placeholder": "John Doe", "help": "Person agreeing not to compete"},
+                {"key": "position", "label": "Position", "type": "text", "placeholder": "Sales Director", "help": "Employee's role"},
+                {"key": "effective_date", "label": "Effective Date", "type": "date", "help": "When agreement begins"},
+                {"key": "restricted_activities", "label": "Restricted Activities", "type": "textarea", "placeholder": "Employment by competitor, soliciting clients, competing business", "help": "What employee cannot do"},
+                {"key": "duration", "label": "Restriction Duration", "type": "text", "placeholder": "24 months after employment ends", "help": "How long restrictions last"},
+                {"key": "geographic_scope", "label": "Geographic Scope", "type": "text", "placeholder": "50-mile radius of employer's offices", "help": "Where restrictions apply"},
+                {"key": "industry_scope", "label": "Industry Scope", "type": "textarea", "placeholder": "Software development for healthcare industry", "help": "Which industries are restricted"},
+                {"key": "consideration", "label": "Consideration", "type": "text", "placeholder": "Continued employment, $10,000 signing bonus", "help": "What employee receives in exchange"},
+                {"key": "non_solicitation", "label": "Non-Solicitation Terms", "type": "textarea", "placeholder": "May not solicit employees or clients for 18 months", "help": "Restrictions on soliciting"},
+                {"key": "remedies", "label": "Remedies for Breach", "type": "textarea", "placeholder": "Injunctive relief, monetary damages, attorney fees", "help": "What happens if violated"},
+                {"key": "severability", "label": "Severability Clause", "type": "text", "placeholder": "Court may modify overly broad restrictions", "help": "If parts are unenforceable"},
+                {"key": "governing_law", "label": "Governing Law", "type": "text", "placeholder": "State of Texas", "help": "Applicable jurisdiction"},
+            ],
+            "Employee Handbook": [
+                {"key": "company_name", "label": "Company Name", "type": "text", "placeholder": "ABC Corporation", "help": "Name of the organization"},
+                {"key": "effective_date", "label": "Effective Date", "type": "date", "help": "When handbook takes effect"},
+                {"key": "mission_values", "label": "Mission and Values", "type": "textarea", "placeholder": "Company mission statement and core values", "help": "Company culture and principles"},
+                {"key": "employment_policies", "label": "Employment Policies", "type": "textarea", "placeholder": "At-will employment, equal opportunity, anti-discrimination", "help": "Core employment policies"},
+                {"key": "work_schedule", "label": "Work Schedule and Hours", "type": "textarea", "placeholder": "Standard hours, overtime, flex time, remote work", "help": "When and where employees work"},
+                {"key": "compensation", "label": "Compensation Policies", "type": "textarea", "placeholder": "Pay periods, overtime, bonuses, raises", "help": "How employees are paid"},
+                {"key": "benefits", "label": "Benefits Overview", "type": "textarea", "placeholder": "Health insurance, retirement, PTO, holidays", "help": "Employee benefits available"},
+                {"key": "pto_policy", "label": "PTO/Leave Policy", "type": "textarea", "placeholder": "Vacation, sick leave, parental leave, FMLA", "help": "Time off policies"},
+                {"key": "conduct_standards", "label": "Standards of Conduct", "type": "textarea", "placeholder": "Expected behavior, dress code, attendance", "help": "Behavioral expectations"},
+                {"key": "technology_use", "label": "Technology and Social Media", "type": "textarea", "placeholder": "Acceptable use of company tech, social media guidelines", "help": "Technology policies"},
+                {"key": "safety", "label": "Health and Safety", "type": "textarea", "placeholder": "Workplace safety, reporting injuries, emergency procedures", "help": "Safety protocols"},
+                {"key": "harassment_policy", "label": "Anti-Harassment Policy", "type": "textarea", "placeholder": "Zero tolerance, reporting procedures, investigation process", "help": "Harassment prevention"},
+                {"key": "discipline", "label": "Disciplinary Procedures", "type": "textarea", "placeholder": "Progressive discipline, grounds for termination", "help": "How violations are handled"},
+                {"key": "acknowledgment", "label": "Acknowledgment Language", "type": "textarea", "placeholder": "Employee acknowledgment that they received and read handbook", "help": "Receipt confirmation"},
+            ],
+        }
+
+        # Merge all document types
+        ALL_EXTENDED_TYPES = {**EXTENDED_DOCUMENT_TYPES, **ADDITIONAL_DOCUMENT_TYPES}
+
+        # Check extended types first
+        if document_type in ALL_EXTENDED_TYPES:
+            return ALL_EXTENDED_TYPES[document_type]
+
+        # Check base DOCUMENT_TYPES
         if document_type in DOCUMENT_TYPES:
-            # Use predefined fields for known types
             return DOCUMENT_TYPES[document_type]["fields"]
 
-        # For unknown types, ask the LLM
+        # For truly unknown types, ask the LLM
         prompt = f"""What fields/information are typically required to draft a {document_type}?
 
 Return a JSON array of field objects, each with:
@@ -274,7 +564,7 @@ Example:
     {{"key": "effective_date", "label": "Effective Date", "type": "date", "placeholder": "", "help": "When the agreement takes effect"}}
 ]
 
-Return only the JSON array, no other text."""
+Return ONLY the JSON array, no other text."""
 
         messages = [
             {"role": "system", "content": "You are a legal document expert. Return only valid JSON."},
@@ -282,7 +572,7 @@ Return only the JSON array, no other text."""
         ]
 
         try:
-            response = self.llm.chat(messages, temperature=0.2, max_tokens=1500)
+            response = self.llm.chat(messages, temperature=0.2, max_tokens=2000)
             import json
             # Extract JSON array
             json_start = response.find('[')
@@ -292,29 +582,49 @@ Return only the JSON array, no other text."""
                 return fields
             else:
                 # Fallback
-                return [
-                    {"key": "details", "label": "Document Details", "type": "textarea", "placeholder": "Enter all relevant information"}
-                ]
+                return EXTENDED_DOCUMENT_TYPES["Custom Document"]
         except Exception:
-            return [
-                {"key": "details", "label": "Document Details", "type": "textarea", "placeholder": "Enter all relevant information"}
-            ]
+            return EXTENDED_DOCUMENT_TYPES["Custom Document"]
 
     # -- Style examples from ChromaDB ------------------------------------
 
     def get_style_examples(
         self, document_type: str, n_examples: int = 3
     ) -> list[str]:
-        """Retrieve example chunks from ChromaDB filtered by document_type."""
+        """
+        Retrieve example chunks from ChromaDB filtered by document_type.
+        Prioritizes chunks from indexed real documents over manually uploaded examples.
+        """
         if self.collection is None or self.collection.count() == 0:
             return []
         try:
+            # Try to get examples from indexed documents (from scanner)
             results = self.collection.query(
-                query_texts=[f"{document_type} document example"],
-                n_results=min(n_examples, self.collection.count()),
+                query_texts=[f"{document_type} professional legal document"],
+                n_results=min(n_examples * 2, self.collection.count()),  # Get more candidates
                 where={"document_type": document_type},
             )
-            return results["documents"][0] if results["documents"] else []
+
+            if results["documents"] and results["documents"][0]:
+                # Filter for higher-quality examples (longer chunks, from indexed files)
+                candidates = results["documents"][0]
+                metadatas = results.get("metadatas", [[]])[0]
+
+                # Prioritize chunks from scanned documents (have source_path metadata)
+                scored_examples = []
+                for chunk, metadata in zip(candidates, metadatas):
+                    score = len(chunk)  # Base score on length
+                    if metadata.get("source_path"):
+                        score += 500  # Bonus for being from scanned document
+                    if metadata.get("confidence", 0) > 0.7:
+                        score += 200  # Bonus for high classification confidence
+                    scored_examples.append((score, chunk))
+
+                # Sort by score and take top n
+                scored_examples.sort(reverse=True, key=lambda x: x[0])
+                return [chunk for _, chunk in scored_examples[:n_examples]]
+
+            return []
         except Exception:
             # If where-filter fails (no matching docs), fall back to empty
             return []
