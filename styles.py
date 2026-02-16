@@ -1,12 +1,7 @@
-"""
-Modern UI styling for Corporate Law Document Generator.
+﻿"""
+Minimal UI styling for Corporate Law Document Generator.
 
-Professional legal/corporate theme with:
-- Clean typography
-- Dark navy and gold color scheme
-- Card-based layouts
-- Smooth transitions
-- Proper spacing and hierarchy
+Visual direction: lightweight, editorial, and restrained.
 """
 
 
@@ -14,657 +9,484 @@ def get_custom_css() -> str:
     """Return custom CSS for the application."""
     return """
     <style>
-    /* ====================================================================
-       Global Theme & Typography
-       ==================================================================== */
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
 
     :root {
-        --primary-navy: #1a2332;
-        --secondary-navy: #2d3e50;
-        --accent-gold: #d4af37;
-        --accent-gold-light: #e8d4a0;
-        --text-primary: #1a2332;
-        --text-secondary: #5a6c7d;
-        --text-light: #8b95a1;
-        --bg-white: #ffffff;
-        --bg-light: #f8f9fa;
-        --bg-card: #ffffff;
-        --border-color: #e1e4e8;
-        --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
-        --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
-        --shadow-lg: 0 10px 20px rgba(0,0,0,0.1);
-        --success: #28a745;
-        --warning: #ffc107;
-        --error: #dc3545;
-        --info: #17a2b8;
+        --ink-900: #111111;
+        --ink-700: #2b2b2b;
+        --ink-500: #6b6b6b;
+        --ink-300: #cfcfcf;
+        --paper-100: #ffffff;
+        --paper-200: #f6f6f4;
+        --paper-300: #efefed;
+        --line: #dfdfdc;
+        --accent: #1f1f1f;
+        --success: #1f7a3f;
+        --warning: #8a6700;
+        --error: #9f2121;
+        --info: #115f8a;
+        --radius-sm: 8px;
+        --radius-md: 14px;
+        --radius-lg: 20px;
+        --shadow-soft: 0 6px 26px rgba(17, 17, 17, 0.07);
+        --shadow-tight: 0 2px 8px rgba(17, 17, 17, 0.08);
     }
 
-    /* Main content area */
+    html, body, [class*="css"] {
+        font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        color: var(--ink-900);
+        background: var(--paper-100);
+    }
+
     .main .block-container {
+        max-width: 1220px;
         padding-top: 2rem;
         padding-bottom: 3rem;
-        max-width: 1400px;
-    }
-
-    /* Typography */
-    html, body, [class*="css"] {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
-        color: var(--text-primary);
     }
 
     h1, h2, h3, h4, h5, h6 {
-        font-weight: 600;
-        color: var(--primary-navy);
+        color: var(--ink-900);
         letter-spacing: -0.02em;
+        font-weight: 700;
     }
 
     h1 {
-        font-size: 2.5rem;
+        font-size: clamp(2rem, 3vw, 2.8rem);
+        line-height: 1.1;
         margin-bottom: 0.5rem;
     }
 
     h2 {
-        font-size: 1.75rem;
-        margin-top: 2rem;
-        margin-bottom: 1rem;
-    }
-
-    h3 {
-        font-size: 1.25rem;
+        font-size: clamp(1.45rem, 2.2vw, 1.85rem);
+        line-height: 1.2;
         margin-top: 1.5rem;
         margin-bottom: 0.75rem;
     }
 
-    p {
-        line-height: 1.6;
-        color: var(--text-secondary);
+    h3 {
+        font-size: 1.18rem;
+        margin-top: 1.2rem;
+        margin-bottom: 0.65rem;
     }
 
-    /* ====================================================================
-       Header & Branding
-       ==================================================================== */
+    p, li {
+        color: var(--ink-700);
+        line-height: 1.62;
+    }
 
     .app-header {
-        background: linear-gradient(135deg, var(--primary-navy) 0%, var(--secondary-navy) 100%);
-        color: white;
-        padding: 2rem 2rem 1.5rem 2rem;
-        margin: -2rem -2rem 2rem -2rem;
-        border-radius: 0 0 16px 16px;
-        box-shadow: var(--shadow-lg);
+        background:
+            radial-gradient(80rem 36rem at 12% -12%, rgba(0,0,0,0.06), transparent 62%),
+            linear-gradient(180deg, #ffffff 0%, #fbfbfa 100%);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-lg);
+        padding: 2rem;
+        margin: 0 0 1.5rem 0;
+        box-shadow: var(--shadow-soft);
     }
 
     .app-header h1 {
-        color: white;
         margin: 0;
-        font-size: 2rem;
-        font-weight: 700;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.01em;
     }
 
     .app-header .subtitle {
-        color: var(--accent-gold-light);
-        font-size: 0.95rem;
+        color: var(--ink-500);
         margin-top: 0.5rem;
-        font-weight: 400;
+        font-size: 0.96rem;
     }
 
     .app-header .disclaimer {
-        color: rgba(255, 255, 255, 0.7);
-        font-size: 0.75rem;
-        margin-top: 1rem;
-        font-style: italic;
+        margin-top: 0.95rem;
+        color: var(--ink-500);
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
     }
 
-    /* User info badge */
     .user-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        background: rgba(255, 255, 255, 0.15);
-        padding: 0.5rem 1rem;
-        border-radius: 50px;
-        font-size: 0.875rem;
-        margin-top: 1rem;
-        backdrop-filter: blur(10px);
+        display: none;
     }
 
     .user-badge .role-tag {
-        background: var(--accent-gold);
-        color: var(--primary-navy);
-        padding: 0.15rem 0.5rem;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: 600;
+        display: inline-block;
+        padding: 0.15rem 0.45rem;
+        border-radius: 999px;
+        background: var(--paper-200);
+        border: 1px solid var(--line);
+        color: var(--ink-700);
+        font-size: 0.68rem;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.08em;
     }
 
-    /* ====================================================================
-       Cards & Containers
-       ==================================================================== */
-
     .card {
-        background: var(--bg-card);
-        border: 1px solid var(--border-color);
-        border-radius: 12px;
-        padding: 1.5rem;
-        margin: 1rem 0;
-        box-shadow: var(--shadow-sm);
-        transition: all 0.3s ease;
+        background: var(--paper-100);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-md);
+        padding: 1.35rem 1.45rem;
+        margin: 0.9rem 0;
+        box-shadow: var(--shadow-tight);
     }
 
     .card:hover {
-        box-shadow: var(--shadow-md);
-        transform: translateY(-2px);
+        border-color: #c9c9c4;
     }
 
     .card-header {
-        font-size: 1.1rem;
-        font-weight: 600;
-        color: var(--primary-navy);
-        margin-bottom: 1rem;
-        padding-bottom: 0.75rem;
-        border-bottom: 2px solid var(--accent-gold);
+        margin: 0 0 0.7rem 0;
+        padding: 0 0 0.55rem 0;
+        border-bottom: 1px solid var(--line);
+        color: var(--ink-900);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-size: 0.8rem;
+        font-weight: 700;
+    }
+
+    .info-card,
+    .warning-card,
+    .success-card,
+    .error-card {
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--line);
+        padding: 0.9rem 1rem;
+        margin: 0.85rem 0;
     }
 
     .info-card {
-        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        background: #f3f8fb;
         border-left: 4px solid var(--info);
-        padding: 1rem 1.25rem;
-        border-radius: 8px;
-        margin: 1rem 0;
     }
 
     .warning-card {
-        background: #fff9e6;
+        background: #fff9ea;
         border-left: 4px solid var(--warning);
-        padding: 1rem 1.25rem;
-        border-radius: 8px;
-        margin: 1rem 0;
     }
 
     .success-card {
-        background: #e8f5e9;
+        background: #edf8f0;
         border-left: 4px solid var(--success);
-        padding: 1rem 1.25rem;
-        border-radius: 8px;
-        margin: 1rem 0;
     }
 
     .error-card {
-        background: #ffebee;
+        background: #fff1f1;
         border-left: 4px solid var(--error);
-        padding: 1rem 1.25rem;
-        border-radius: 8px;
-        margin: 1rem 0;
     }
 
-    /* ====================================================================
-       Buttons
-       ==================================================================== */
-
     .stButton > button {
-        background: linear-gradient(135deg, var(--primary-navy) 0%, var(--secondary-navy) 100%);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 0.65rem 1.5rem;
-        font-weight: 500;
-        font-size: 0.95rem;
-        transition: all 0.3s ease;
-        box-shadow: var(--shadow-sm);
+        border-radius: 999px;
+        border: 1px solid #1c1c1c;
+        background: #1c1c1c;
+        color: #ffffff;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        padding: 0.62rem 1.25rem;
+        min-height: 2.65rem;
+        transition: transform 120ms ease, background 140ms ease, box-shadow 140ms ease;
+        box-shadow: 0 1px 0 rgba(0,0,0,0.12);
     }
 
     .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: var(--shadow-md);
-        background: linear-gradient(135deg, var(--secondary-navy) 0%, var(--primary-navy) 100%);
+        transform: translateY(-1px);
+        background: #000000;
+        box-shadow: 0 8px 18px rgba(0,0,0,0.16);
     }
 
     .stButton > button:active {
         transform: translateY(0);
     }
 
-    .stButton > button[kind="primary"] {
-        background: linear-gradient(135deg, var(--accent-gold) 0%, #c9a84a 100%);
-        color: var(--primary-navy);
-        font-weight: 600;
-    }
-
-    .stButton > button[kind="primary"]:hover {
-        background: linear-gradient(135deg, #c9a84a 0%, var(--accent-gold) 100%);
-    }
-
     .stButton > button[kind="secondary"] {
-        background: white;
-        color: var(--primary-navy);
-        border: 2px solid var(--border-color);
+        background: #ffffff;
+        color: #111111;
+        border-color: var(--line);
     }
 
     .stButton > button[kind="secondary"]:hover {
-        border-color: var(--accent-gold);
-        background: var(--bg-light);
+        background: var(--paper-200);
     }
-
-    /* ====================================================================
-       Forms & Inputs
-       ==================================================================== */
 
     .stTextInput > div > div > input,
     .stTextArea > div > div > textarea,
-    .stSelectbox > div > div > select,
-    .stDateInput > div > div > input {
-        border-radius: 8px;
-        border: 2px solid var(--border-color);
-        padding: 0.75rem;
+    .stSelectbox > div > div > div,
+    .stDateInput > div > div > input,
+    [data-baseweb="select"] > div {
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #ffffff;
+        color: var(--ink-900);
         font-size: 0.95rem;
-        transition: all 0.2s ease;
+        transition: border-color 150ms ease, box-shadow 150ms ease;
     }
 
     .stTextInput > div > div > input:focus,
     .stTextArea > div > div > textarea:focus,
-    .stSelectbox > div > div > select:focus,
     .stDateInput > div > div > input:focus {
-        border-color: var(--accent-gold);
-        box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.1);
+        border-color: #8d8d8a;
+        box-shadow: 0 0 0 3px rgba(17,17,17,0.06);
         outline: none;
     }
 
-    .stTextArea > div > div > textarea {
-        min-height: 120px;
-        font-family: inherit;
-    }
-
     label {
-        font-weight: 500;
-        color: var(--text-primary);
-        font-size: 0.9rem;
-        margin-bottom: 0.5rem;
+        color: var(--ink-700);
+        font-size: 0.82rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 700;
     }
 
-    /* File uploader */
     .stFileUploader > div {
-        border: 2px dashed var(--border-color);
-        border-radius: 12px;
-        padding: 2rem;
-        text-align: center;
-        transition: all 0.3s ease;
-        background: var(--bg-light);
+        border: 1px dashed #bdbdb8;
+        border-radius: var(--radius-md);
+        padding: 1.5rem;
+        background: repeating-linear-gradient(
+            -45deg,
+            #ffffff,
+            #ffffff 8px,
+            #fafaf8 8px,
+            #fafaf8 16px
+        );
     }
 
     .stFileUploader > div:hover {
-        border-color: var(--accent-gold);
-        background: white;
+        border-color: #8f8f89;
     }
 
-    /* ====================================================================
-       Tabs
-       ==================================================================== */
-
     .stTabs [data-baseweb="tab-list"] {
-        gap: 0.5rem;
-        background: var(--bg-light);
-        padding: 0.5rem;
-        border-radius: 12px;
-        margin-bottom: 1.5rem;
+        gap: 0.35rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.35rem;
+        margin-bottom: 0.8rem;
+        overflow-x: auto;
     }
 
     .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        padding: 0.75rem 1.5rem;
-        font-weight: 500;
-        color: var(--text-secondary);
+        border-radius: 999px;
+        border: 1px solid transparent;
         background: transparent;
-        transition: all 0.2s ease;
+        color: var(--ink-500);
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        font-size: 0.72rem;
+        padding: 0.45rem 0.78rem;
     }
 
-    .stTabs [data-baseweb="tab"]:hover {
-        background: white;
-        color: var(--primary-navy);
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+        border-color: var(--line);
+        color: var(--ink-900);
+        background: #ffffff;
     }
-
-    .stTabs [aria-selected="true"] {
-        background: white;
-        color: var(--primary-navy);
-        box-shadow: var(--shadow-sm);
-    }
-
-    /* ====================================================================
-       Chat Interface
-       ==================================================================== */
 
     .stChatMessage {
         border-radius: 12px;
-        padding: 1rem 1.25rem;
-        margin: 0.75rem 0;
-        box-shadow: var(--shadow-sm);
+        border: 1px solid var(--line);
+        box-shadow: none;
     }
 
     .stChatMessage[data-testid="user"] {
-        background: linear-gradient(135deg, var(--primary-navy) 0%, var(--secondary-navy) 100%);
-        color: white;
-        margin-left: 2rem;
+        background: #141414;
+        color: #ffffff;
+        margin-left: 1.5rem;
     }
 
     .stChatMessage[data-testid="assistant"] {
-        background: white;
-        border: 1px solid var(--border-color);
-        margin-right: 2rem;
+        background: #ffffff;
+        color: var(--ink-900);
+        margin-right: 1.5rem;
     }
 
     .stChatInputContainer {
-        border-top: 1px solid var(--border-color);
-        padding-top: 1rem;
-        margin-top: 1rem;
+        margin-top: 0.8rem;
+        padding-top: 0.8rem;
+        border-top: 1px solid var(--line);
     }
 
-    /* ====================================================================
-       Sidebar
-       ==================================================================== */
-
     section[data-testid="stSidebar"] {
-        background: var(--bg-light);
-        border-right: 1px solid var(--border-color);
+        background: linear-gradient(180deg, #fcfcfb 0%, #f5f5f2 100%);
+        border-right: 1px solid var(--line);
     }
 
     section[data-testid="stSidebar"] > div {
-        padding-top: 2rem;
+        padding-top: 1.35rem;
     }
 
     .sidebar-header {
-        background: linear-gradient(135deg, var(--primary-navy) 0%, var(--secondary-navy) 100%);
-        color: white;
-        padding: 1.5rem;
-        margin: -2rem -1rem 1.5rem -1rem;
-        border-radius: 0 0 12px 12px;
+        background: transparent;
+        border-bottom: 1px solid var(--line);
+        padding: 0 0 0.75rem 0;
+        margin: 0 0 0.85rem 0;
     }
 
     .sidebar-header h2 {
-        color: white;
-        font-size: 1.25rem;
         margin: 0;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink-700);
     }
 
-    /* Status badges */
     .status-badge {
         display: inline-flex;
         align-items: center;
-        gap: 0.5rem;
-        padding: 0.5rem 0.75rem;
-        border-radius: 6px;
-        font-size: 0.875rem;
-        font-weight: 500;
-        margin: 0.25rem 0;
+        gap: 0.45rem;
+        padding: 0.4rem 0.62rem;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        background: #ffffff;
     }
 
-    .status-success {
-        background: #d4edda;
-        color: #155724;
-        border: 1px solid #c3e6cb;
-    }
+    .status-success { color: #14512c; }
+    .status-warning { color: #6c4f00; }
+    .status-error { color: #8a1e1e; }
+    .status-info { color: #0f4f73; }
 
-    .status-warning {
-        background: #fff3cd;
-        color: #856404;
-        border: 1px solid #ffeaa7;
-    }
-
-    .status-error {
-        background: #f8d7da;
-        color: #721c24;
-        border: 1px solid #f5c6cb;
-    }
-
-    .status-info {
-        background: #d1ecf1;
-        color: #0c5460;
-        border: 1px solid #bee5eb;
-    }
-
-    /* Connection indicators */
     .connection-indicator {
-        display: inline-block;
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        margin-right: 0.5rem;
+        display: inline-block;
     }
 
-    .connection-success {
-        background: var(--success);
-        box-shadow: 0 0 8px rgba(40, 167, 69, 0.5);
-    }
-
-    .connection-warning {
-        background: var(--warning);
-        box-shadow: 0 0 8px rgba(255, 193, 7, 0.5);
-    }
-
-    .connection-error {
-        background: var(--error);
-        box-shadow: 0 0 8px rgba(220, 53, 69, 0.5);
-    }
-
-    /* ====================================================================
-       Metrics & Stats
-       ==================================================================== */
+    .connection-success { background: #1f7a3f; }
+    .connection-warning { background: #8a6700; }
+    .connection-error { background: #9f2121; }
 
     [data-testid="stMetric"] {
-        background: white;
-        padding: 1rem;
-        border-radius: 10px;
-        border: 1px solid var(--border-color);
-        box-shadow: var(--shadow-sm);
+        background: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        box-shadow: none;
     }
 
     [data-testid="stMetric"] label {
-        font-size: 0.875rem;
-        color: var(--text-secondary);
-        font-weight: 500;
+        letter-spacing: 0.08em;
     }
 
     [data-testid="stMetric"] [data-testid="stMetricValue"] {
-        font-size: 2rem;
-        font-weight: 700;
-        color: var(--primary-navy);
+        color: var(--ink-900);
+        font-size: 1.9rem;
+        font-weight: 800;
     }
 
-    /* ====================================================================
-       Document Cards
-       ==================================================================== */
+    .doc-card,
+    .doc-type-grid-card,
+    .landing-card {
+        background: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-md);
+    }
 
     .doc-card {
-        background: white;
-        border: 1px solid var(--border-color);
-        border-radius: 12px;
-        padding: 1.25rem;
-        margin: 0.75rem 0;
-        transition: all 0.3s ease;
-        cursor: pointer;
+        padding: 1rem 1.1rem;
+        margin: 0.6rem 0;
     }
 
     .doc-card:hover {
-        box-shadow: var(--shadow-md);
-        transform: translateX(4px);
-        border-color: var(--accent-gold);
-    }
-
-    .doc-card-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 0.75rem;
+        border-color: #bdbdb8;
+        box-shadow: var(--shadow-tight);
     }
 
     .doc-card-title {
-        font-weight: 600;
-        color: var(--primary-navy);
-        font-size: 1rem;
+        color: var(--ink-900);
+        font-weight: 700;
     }
 
     .doc-card-meta {
-        font-size: 0.8rem;
-        color: var(--text-light);
-        display: flex;
-        gap: 1rem;
-        margin-top: 0.5rem;
+        color: var(--ink-500);
+        font-size: 0.78rem;
     }
 
     .doc-type-tag {
-        display: inline-block;
-        background: var(--accent-gold);
-        color: var(--primary-navy);
-        padding: 0.25rem 0.75rem;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: 600;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: var(--paper-200);
+        color: var(--ink-700);
+        font-size: 0.66rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        padding: 0.22rem 0.58rem;
     }
 
-    /* Document Type Grid Cards */
     .doc-type-grid-card {
-        background: white;
-        border: 2px solid var(--border-color);
-        border-radius: 16px;
-        padding: 2rem 1.5rem;
+        padding: 1.2rem;
         text-align: center;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: space-between;
+        box-shadow: none;
     }
 
     .doc-type-grid-card:hover {
-        border-color: var(--accent-gold);
-        box-shadow: 0 8px 24px rgba(212, 175, 55, 0.2);
-        transform: translateY(-4px);
+        border-color: #bdbdb8;
+        transform: translateY(-2px);
     }
 
     .doc-type-icon {
-        font-size: 3.5rem;
-        margin-bottom: 1rem;
-        filter: grayscale(20%);
-        transition: all 0.3s ease;
+        font-size: 2.6rem;
+        margin-bottom: 0.7rem;
+        filter: grayscale(100%);
     }
 
-    .doc-type-grid-card:hover .doc-type-icon {
-        filter: grayscale(0%);
-        transform: scale(1.1);
-    }
-
-    /* Landing Page Cards */
     .landing-card {
-        background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
-        border: 2px solid var(--border-color);
-        border-radius: 20px;
-        padding: 3rem 2rem;
+        padding: 1.7rem 1.3rem;
         text-align: center;
-        transition: all 0.4s ease;
-        cursor: pointer;
-        height: 100%;
-        box-shadow: var(--shadow-sm);
+        box-shadow: var(--shadow-tight);
     }
 
     .landing-card:hover {
-        border-color: var(--accent-gold);
-        box-shadow: 0 12px 32px rgba(26, 35, 50, 0.12);
-        transform: translateY(-8px);
-        background: linear-gradient(135deg, #ffffff 0%, #ffffff 100%);
+        border-color: #b9b9b4;
+        transform: translateY(-3px);
     }
 
     .landing-card-icon {
-        font-size: 5rem;
-        margin-bottom: 1.5rem;
-        transition: all 0.3s ease;
+        font-size: 2.8rem;
+        margin-bottom: 0.7rem;
     }
-
-    .landing-card:hover .landing-card-icon {
-        transform: scale(1.15);
-    }
-
-    /* ====================================================================
-       Loading & Progress
-       ==================================================================== */
 
     .stProgress > div > div {
-        background: var(--accent-gold);
-        border-radius: 10px;
+        background: #1f1f1f;
+        border-radius: 999px;
     }
 
     .stSpinner > div {
-        border-top-color: var(--accent-gold);
+        border-top-color: #222222;
     }
-
-    /* ====================================================================
-       Alerts & Messages
-       ==================================================================== */
 
     .stAlert {
         border-radius: 10px;
-        padding: 1rem 1.25rem;
         border-width: 1px;
-        margin: 1rem 0;
     }
-
-    .stSuccess {
-        background: #d4edda;
-        border-color: #c3e6cb;
-        color: #155724;
-    }
-
-    .stWarning {
-        background: #fff3cd;
-        border-color: #ffeaa7;
-        color: #856404;
-    }
-
-    .stError {
-        background: #f8d7da;
-        border-color: #f5c6cb;
-        color: #721c24;
-    }
-
-    .stInfo {
-        background: #d1ecf1;
-        border-color: #bee5eb;
-        color: #0c5460;
-    }
-
-    /* ====================================================================
-       Authentication Pages
-       ==================================================================== */
 
     .auth-container {
-        max-width: 450px;
-        margin: 4rem auto;
-        background: white;
-        padding: 3rem;
-        border-radius: 16px;
-        box-shadow: var(--shadow-lg);
-        border: 1px solid var(--border-color);
+        max-width: 460px;
+        margin: 2.6rem auto;
+        background: #ffffff;
+        padding: 2rem;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--line);
+        box-shadow: var(--shadow-soft);
     }
 
     .auth-header {
         text-align: center;
-        margin-bottom: 2rem;
+        margin-bottom: 1.4rem;
     }
 
     .auth-header h1 {
-        font-size: 2rem;
-        margin-bottom: 0.5rem;
-    }
-
-    .auth-header .logo {
-        font-size: 3rem;
-        margin-bottom: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-size: 1.55rem;
     }
 
     .auth-divider {
         text-align: center;
-        margin: 1.5rem 0;
+        margin: 1.15rem 0;
         position: relative;
     }
 
@@ -675,51 +497,42 @@ def get_custom_css() -> str:
         left: 0;
         right: 0;
         height: 1px;
-        background: var(--border-color);
+        background: var(--line);
     }
 
     .auth-divider span {
-        background: white;
-        padding: 0 1rem;
+        background: #ffffff;
+        padding: 0 0.7rem;
         position: relative;
-        color: var(--text-light);
-        font-size: 0.875rem;
+        color: var(--ink-500);
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
     }
 
-    /* ====================================================================
-       Footer
-       ==================================================================== */
-
     .app-footer {
-        margin-top: 4rem;
-        padding-top: 2rem;
-        border-top: 1px solid var(--border-color);
+        margin-top: 3rem;
+        border-top: 1px solid var(--line);
+        padding-top: 1.2rem;
         text-align: center;
-        color: var(--text-light);
-        font-size: 0.875rem;
+        color: var(--ink-500);
+        font-size: 0.78rem;
     }
 
     .app-footer .version {
-        color: var(--text-secondary);
-        font-weight: 500;
+        color: var(--ink-700);
+        font-weight: 700;
     }
 
-    /* ====================================================================
-       Responsive Design
-       ==================================================================== */
+    @media (max-width: 920px) {
+        .main .block-container {
+            padding-top: 1.25rem;
+            padding-bottom: 2rem;
+        }
 
-    @media (max-width: 768px) {
         .app-header {
-            padding: 1.5rem 1rem;
-            margin: -1rem -1rem 1.5rem -1rem;
-        }
-
-        .app-header h1 {
-            font-size: 1.5rem;
-        }
-
-        .app-header .subtitle {
-            font-size: 0.85rem;
+            padding: 1.25rem;
+            border-radius: 14px;
         }
 
         .stChatMessage[data-testid="user"],
@@ -727,118 +540,49 @@ def get_custom_css() -> str:
             margin-left: 0;
             margin-right: 0;
         }
+    }
 
+    @media (max-width: 640px) {
+        h1 { font-size: 1.6rem; }
+        h2 { font-size: 1.25rem; }
         .auth-container {
-            margin: 1rem 0.5rem;
-            padding: 1.5rem 1rem;
+            margin: 0.8rem 0.25rem;
+            padding: 1.3rem 1rem;
         }
 
-        .card {
-            padding: 1rem;
-            margin: 0.75rem 0;
-        }
-
-        .card-header {
-            font-size: 1rem;
-        }
-
-        .sidebar-header {
-            padding: 1rem;
-            margin: -1rem -0.5rem 1rem -0.5rem;
-        }
-
-        /* Make form inputs more touch-friendly */
-        .stTextInput > div > div > input,
-        .stTextArea > div > div > textarea,
-        .stSelectbox > div > div > select {
-            font-size: 16px; /* Prevents iOS zoom */
-            padding: 0.85rem;
-        }
-
-        /* Stack columns on mobile */
-        .stColumns {
-            flex-direction: column;
-        }
-
-        /* Better button sizing */
         .stButton > button {
-            padding: 0.75rem 1rem;
-            font-size: 1rem;
+            width: 100%;
         }
     }
 
-    @media (max-width: 480px) {
-        .app-header h1 {
-            font-size: 1.25rem;
-        }
-
-        .user-badge {
-            font-size: 0.75rem;
-            padding: 0.4rem 0.75rem;
-        }
-
-        h2 {
-            font-size: 1.4rem;
-        }
-
-        h3 {
-            font-size: 1.1rem;
-        }
-    }
-
-    /* ====================================================================
-       Utility Classes
-       ==================================================================== */
-
-    .text-center {
-        text-align: center;
-    }
-
-    .text-muted {
-        color: var(--text-light);
-    }
-
+    .text-center { text-align: center; }
+    .text-muted { color: var(--ink-500); }
     .mt-1 { margin-top: 0.5rem; }
     .mt-2 { margin-top: 1rem; }
     .mt-3 { margin-top: 1.5rem; }
     .mt-4 { margin-top: 2rem; }
-
     .mb-1 { margin-bottom: 0.5rem; }
     .mb-2 { margin-bottom: 1rem; }
     .mb-3 { margin-bottom: 1.5rem; }
     .mb-4 { margin-bottom: 2rem; }
-
     .p-1 { padding: 0.5rem; }
     .p-2 { padding: 1rem; }
     .p-3 { padding: 1.5rem; }
     .p-4 { padding: 2rem; }
-
-    .hidden {
-        display: none;
-    }
-
-    /* ====================================================================
-       Animations
-       ==================================================================== */
+    .hidden { display: none; }
 
     @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
+        from { opacity: 0; transform: translateY(8px); }
         to { opacity: 1; transform: translateY(0); }
     }
 
     @keyframes slideIn {
-        from { transform: translateX(-20px); opacity: 0; }
+        from { transform: translateX(-10px); opacity: 0; }
         to { transform: translateX(0); opacity: 1; }
     }
 
-    .fade-in {
-        animation: fadeIn 0.3s ease;
-    }
-
-    .slide-in {
-        animation: slideIn 0.4s ease;
-    }
-
+    .fade-in { animation: fadeIn 0.22s ease; }
+    .slide-in { animation: slideIn 0.24s ease; }
     </style>
     """
 
@@ -880,10 +624,10 @@ def render_footer():
 
     st.markdown("""
     <div class="app-footer">
-        <div style="color: var(--text-secondary); font-weight: 500;">Corporate Law Document Generator</div>
-        <div class="mt-1">Powered by AI • Built with Streamlit</div>
+        <div style="color: var(--ink-700); font-weight: 700;">Corporate Law Document Generator</div>
+        <div class="mt-1">Powered by AI | Built with Streamlit</div>
         <div class="mt-1 text-muted">
-            For attorney use only • All generated documents require legal review
+            For attorney use only | All generated documents require legal review
         </div>
     </div>
     """, unsafe_allow_html=True)

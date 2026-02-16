@@ -1,12 +1,11 @@
 """
-Background Scanner — Runs continuous document scanning in a background thread.
+Background Scanner ? Runs continuous document scanning in a background thread.
 
 Monitors configured directories for new/modified files and incrementally
 indexes them without blocking the main Streamlit application.
 """
 
 import threading
-import time
 import logging
 from typing import Optional, Callable
 from datetime import datetime, timedelta
@@ -27,6 +26,7 @@ class BackgroundScanner:
 
     def __init__(
         self,
+        user_id: int,
         llm: LLMBackend,
         chroma_collection,
         knowledge_db: KnowledgeDB,
@@ -34,6 +34,7 @@ class BackgroundScanner:
         scan_interval_minutes: int = 30,
         auto_start: bool = False
     ):
+        self.user_id = user_id
         self.llm = llm
         self.collection = chroma_collection
         self.knowledge_db = knowledge_db
@@ -77,14 +78,14 @@ class BackgroundScanner:
         self._thread.start()
         self._running = True
         self.status["is_running"] = True
-        logger.info("Background scanner started")
+        logger.info("Background scanner started for user_id=%s", self.user_id)
 
     def stop(self):
         """Stop the background scanning thread."""
         if not self._running:
             return
 
-        logger.info("Stopping background scanner...")
+        logger.info("Stopping background scanner for user_id=%s...", self.user_id)
         self._stop_event.set()
 
         if self._thread:
@@ -92,7 +93,7 @@ class BackgroundScanner:
 
         self._running = False
         self.status["is_running"] = False
-        logger.info("Background scanner stopped")
+        logger.info("Background scanner stopped for user_id=%s", self.user_id)
 
     def is_running(self) -> bool:
         """Check if scanner is currently running."""
@@ -107,9 +108,17 @@ class BackgroundScanner:
         # Signal to run scan immediately
         self.status["next_scan_time"] = datetime.now()
 
+    def run_scan_once(self):
+        """Run a single scan immediately (manual/admin use)."""
+        self._run_scan()
+
     def _scan_loop(self):
         """Main scanning loop that runs in background thread."""
-        logger.info(f"Scan loop started (interval: {self.scan_interval_minutes} minutes)")
+        logger.info(
+            "Scan loop started for user_id=%s (interval: %s minutes)",
+            self.user_id,
+            self.scan_interval_minutes,
+        )
 
         # Initial delay before first scan (give app time to start)
         initial_delay = 60  # 1 minute
@@ -131,18 +140,18 @@ class BackgroundScanner:
                     break  # Stop signal received
 
             except Exception as e:
-                logger.error(f"Error in scan loop: {e}")
+                logger.error("Error in scan loop: %s", e)
                 self.status["error"] = str(e)
 
                 # Wait a bit before retrying after error
                 if self._stop_event.wait(300):  # 5 minutes
                     break
 
-        logger.info("Scan loop ended")
+        logger.info("Scan loop ended for user_id=%s", self.user_id)
 
     def _run_scan(self):
         """Execute a single scan operation."""
-        logger.info("Starting background scan...")
+        logger.info("Starting background scan for user_id=%s...", self.user_id)
 
         self.status["last_scan_start"] = datetime.now().isoformat()
         self.status["current_progress"] = {"current": 0, "total": 0, "file": "Initializing..."}
@@ -153,7 +162,8 @@ class BackgroundScanner:
                 llm=self.llm,
                 chroma_collection=self.collection,
                 knowledge_db=self.knowledge_db,
-                scan_paths=self.scan_paths
+                scan_paths=self.scan_paths,
+                user_id=self.user_id,
             )
 
             # Run scan with progress callback
@@ -170,7 +180,7 @@ class BackgroundScanner:
 
             # Build learned templates if we indexed new documents
             if stats["files_indexed"] > 0:
-                logger.info("Building learned templates...")
+                logger.info("Building learned templates for user_id=%s...", self.user_id)
                 scanner.build_learned_templates()
 
             # Update status
@@ -179,10 +189,10 @@ class BackgroundScanner:
             self.status["current_progress"] = None
             self.status["error"] = None
 
-            logger.info(f"Background scan completed: {stats}")
+            logger.info("Background scan completed for user_id=%s: %s", self.user_id, stats)
 
         except Exception as e:
-            logger.error(f"Scan failed: {e}")
+            logger.error("Scan failed for user_id=%s: %s", self.user_id, e)
             self.status["last_scan_end"] = datetime.now().isoformat()
             self.status["error"] = str(e)
             self.status["current_progress"] = None
@@ -192,21 +202,23 @@ class BackgroundScanner:
         return {
             **self.status,
             "scan_interval_minutes": self.scan_interval_minutes,
-            "scan_paths": self.scan_paths
+            "scan_paths": self.scan_paths,
+            "user_id": self.user_id,
         }
 
 
 class ScannerManager:
     """
-    Singleton manager for the background scanner.
-    Ensures only one scanner instance runs per application session.
+    Manager for background scanners keyed by user_id.
+    Ensures scanner state is isolated per authenticated user.
     """
 
-    _instance: Optional[BackgroundScanner] = None
+    _instances: dict[int, BackgroundScanner] = {}
 
     @classmethod
     def initialize(
         cls,
+        user_id: int,
         llm: LLMBackend,
         chroma_collection,
         knowledge_db: KnowledgeDB,
@@ -214,7 +226,7 @@ class ScannerManager:
         scan_interval_minutes: int = None,
         auto_start: bool = None
     ) -> BackgroundScanner:
-        """Initialize the background scanner (call once at app startup)."""
+        """Initialize the background scanner for a specific user."""
 
         # Get configuration from environment
         if scan_interval_minutes is None:
@@ -223,8 +235,9 @@ class ScannerManager:
         if auto_start is None:
             auto_start = os.getenv("AUTO_SCAN_ENABLED", "true").lower() == "true"
 
-        if cls._instance is None:
-            cls._instance = BackgroundScanner(
+        if user_id not in cls._instances:
+            cls._instances[user_id] = BackgroundScanner(
+                user_id=user_id,
                 llm=llm,
                 chroma_collection=chroma_collection,
                 knowledge_db=knowledge_db,
@@ -232,21 +245,29 @@ class ScannerManager:
                 scan_interval_minutes=scan_interval_minutes,
                 auto_start=auto_start
             )
-            logger.info("Background scanner initialized")
+            logger.info("Background scanner initialized for user_id=%s", user_id)
         else:
-            logger.info("Using existing background scanner instance")
+            logger.info("Using existing background scanner instance for user_id=%s", user_id)
 
-        return cls._instance
-
-    @classmethod
-    def get_instance(cls) -> Optional[BackgroundScanner]:
-        """Get the current scanner instance (if initialized)."""
-        return cls._instance
+        return cls._instances[user_id]
 
     @classmethod
-    def shutdown(cls):
-        """Shutdown the background scanner."""
-        if cls._instance:
-            cls._instance.stop()
-            cls._instance = None
-            logger.info("Background scanner shut down")
+    def get_instance(cls, user_id: int) -> Optional[BackgroundScanner]:
+        """Get the current scanner instance for a user (if initialized)."""
+        return cls._instances.get(user_id)
+
+    @classmethod
+    def shutdown(cls, user_id: Optional[int] = None):
+        """Shutdown one user's scanner or all scanners."""
+        if user_id is not None:
+            scanner = cls._instances.get(user_id)
+            if scanner:
+                scanner.stop()
+                del cls._instances[user_id]
+                logger.info("Background scanner shut down for user_id=%s", user_id)
+            return
+
+        for uid, scanner in list(cls._instances.items()):
+            scanner.stop()
+            del cls._instances[uid]
+        logger.info("All background scanners shut down")

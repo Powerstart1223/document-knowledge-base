@@ -52,12 +52,14 @@ class DocumentScanner:
         llm: LLMBackend,
         chroma_collection,
         knowledge_db: KnowledgeDB,
-        scan_paths: List[str] = None
+        scan_paths: List[str] = None,
+        user_id: int = 0,
     ):
         self.llm = llm
         self.collection = chroma_collection
         self.knowledge_db = knowledge_db
         self.scan_paths = scan_paths or self._get_default_scan_paths()
+        self.user_id = user_id
 
         # Statistics
         self.stats = {
@@ -362,7 +364,8 @@ Return ONLY valid JSON, no other text."""
                 file_size=file_size,
                 document_type=document_type,
                 extracted_fields=classification.get("extracted_fields", {}),
-                status="indexed"
+                status="indexed",
+                user_id=self.user_id,
             )
 
             logger.info(f"Indexed {len(chunks)} chunks from {os.path.basename(file_path)}")
@@ -392,7 +395,7 @@ Return ONLY valid JSON, no other text."""
         Main scanning method: discover, classify, and index all documents.
         Returns statistics dict.
         """
-        scan_id = self.knowledge_db.start_scan()
+        scan_id = self.knowledge_db.start_scan(user_id=self.user_id)
         logger.info("Starting document scan...")
 
         # Reset stats
@@ -421,7 +424,7 @@ Return ONLY valid JSON, no other text."""
                     self.stats["files_failed"] += 1
                     continue
 
-                if self.knowledge_db.is_file_scanned(file_path, file_hash):
+                if self.knowledge_db.is_file_scanned(file_path, file_hash, user_id=self.user_id):
                     logger.debug(f"Skipping already indexed: {file_path}")
                     self.stats["files_skipped"] += 1
                     continue
@@ -472,14 +475,14 @@ Return ONLY valid JSON, no other text."""
         logger.info("Building learned templates from indexed documents...")
 
         # Get all unique document types
-        all_types = self.knowledge_db.get_all_document_types()
+        all_types = self.knowledge_db.get_all_document_types(user_id=self.user_id)
 
         for type_info in all_types:
             document_type = type_info["type"]
             logger.info(f"Processing learned template for: {document_type}")
 
             # Get all files of this type
-            files = self.knowledge_db.get_scanned_files_by_type(document_type)
+            files = self.knowledge_db.get_scanned_files_by_type(document_type, user_id=self.user_id)
 
             if not files:
                 continue
@@ -526,7 +529,8 @@ Return ONLY valid JSON, no other text."""
                 document_type=document_type,
                 fields=learned_fields,
                 field_frequencies=field_frequencies,
-                sample_count=total_docs
+                sample_count=total_docs,
+                user_id=self.user_id,
             )
 
             logger.info(f"Created learned template for {document_type} with {len(learned_fields)} fields from {total_docs} documents")

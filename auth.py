@@ -15,8 +15,9 @@ import sqlite3
 import bcrypt
 import re
 import os
-import random
+import secrets
 import smtplib
+import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
@@ -24,6 +25,12 @@ from pathlib import Path
 from typing import Optional
 
 ALLOWED_DOMAIN = "cypressllp.com"
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_MINUTES = 15
+MAX_VERIFICATION_ATTEMPTS = 8
+VERIFICATION_RESEND_COOLDOWN_SECONDS = 60
+
+logger = logging.getLogger(__name__)
 
 
 class User:
@@ -38,6 +45,7 @@ class User:
         created_at: str,
         is_active: bool = True,
         email_verified: bool = False,
+        must_change_password: bool = False,
     ):
         self.user_id = user_id
         self.email = email
@@ -46,6 +54,7 @@ class User:
         self.created_at = created_at
         self.is_active = is_active
         self.email_verified = email_verified
+        self.must_change_password = must_change_password
 
     def is_admin(self) -> bool:
         return self.role == "admin"
@@ -59,6 +68,7 @@ class User:
             "created_at": self.created_at,
             "is_active": self.is_active,
             "email_verified": self.email_verified,
+            "must_change_password": self.must_change_password,
         }
 
 
@@ -86,7 +96,12 @@ class AuthManager:
                 is_active BOOLEAN DEFAULT 1,
                 email_verified BOOLEAN DEFAULT 0,
                 verification_code TEXT,
-                verification_expires TIMESTAMP
+                verification_expires TIMESTAMP,
+                must_change_password BOOLEAN DEFAULT 0,
+                failed_login_attempts INTEGER DEFAULT 0,
+                locked_until TIMESTAMP,
+                verification_attempts INTEGER DEFAULT 0,
+                last_verification_sent TIMESTAMP
             )
         """)
 
@@ -105,6 +120,26 @@ class AuthManager:
             cursor.execute("ALTER TABLE users ADD COLUMN verification_expires TIMESTAMP")
         except sqlite3.OperationalError:
             pass
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN locked_until TIMESTAMP")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN verification_attempts INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN last_verification_sent TIMESTAMP")
+        except sqlite3.OperationalError:
+            pass
 
         # Mark all pre-existing users as verified so they aren't locked out
         if migrated_verified:
@@ -118,15 +153,45 @@ class AuthManager:
             self._create_default_admin()
 
     def _create_default_admin(self):
-        """Create a default admin user for initial setup."""
-        # Default credentials: admin@cypressllp.com / Admin123!
-        self.register_user(
-            email="admin@cypressllp.com",
-            password="Admin123!",
+        """Create a bootstrap admin user for initial setup."""
+        admin_email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", f"admin@{ALLOWED_DOMAIN}").strip().lower()
+        admin_password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "").strip()
+
+        if admin_email.split("@")[-1] != ALLOWED_DOMAIN:
+            admin_email = f"admin@{ALLOWED_DOMAIN}"
+
+        generated = False
+        if not admin_password:
+            # Generate one-time bootstrap credential if no explicit secret is provided.
+            admin_password = f"{secrets.token_urlsafe(14)}A1!"
+            generated = True
+
+        success, message = self.register_user(
+            email=admin_email,
+            password=admin_password,
             full_name="System Administrator",
             role="admin",
             skip_verification=True,
+            must_change_password=True,
         )
+
+        if not success:
+            logger.error("Failed to create bootstrap admin account: %s", message)
+            return
+
+        if generated:
+            try:
+                bootstrap_file = Path("./bootstrap_admin_credentials.txt")
+                bootstrap_file.write_text(
+                    "Temporary bootstrap admin credentials\n"
+                    f"Email: {admin_email}\n"
+                    f"Password: {admin_password}\n"
+                    "Rotate this password immediately after first login.\n",
+                    encoding="utf-8",
+                )
+                logger.warning("Bootstrap admin credentials written to %s", bootstrap_file.resolve())
+            except Exception as exc:
+                logger.warning("Could not write bootstrap admin credentials file: %s", exc)
 
     def _hash_password(self, password: str) -> str:
         """Hash a password using bcrypt."""
@@ -169,8 +234,8 @@ class AuthManager:
         return True, ""
 
     def _generate_verification_code(self) -> str:
-        """Generate a 6-digit verification code."""
-        return f"{random.randint(100000, 999999)}"
+        """Generate a cryptographically secure 6-digit verification code."""
+        return f"{secrets.randbelow(1_000_000):06d}"
 
     def _send_verification_email(self, email: str, code: str, full_name: str) -> tuple[bool, str]:
         """Send verification code via SMTP."""
@@ -226,6 +291,7 @@ class AuthManager:
         full_name: str,
         role: str = "user",
         skip_verification: bool = False,
+        must_change_password: bool = False,
     ) -> tuple[bool, str]:
         """
         Register a new user.
@@ -235,6 +301,9 @@ class AuthManager:
         valid, msg = self.validate_email(email)
         if not valid:
             return False, msg
+
+        if role not in ["admin", "user"]:
+            return False, "Invalid role"
 
         # Validate password (skip for default admin creation)
         if not skip_verification:
@@ -266,9 +335,12 @@ class AuthManager:
         verified = 1 if skip_verification else 0
         code = None
         expires = None
+        verification_attempts = 0
+        last_verification_sent = None
         if not skip_verification:
             code = self._generate_verification_code()
             expires = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+            last_verification_sent = datetime.utcnow().isoformat()
 
         # Insert into database
         try:
@@ -277,11 +349,13 @@ class AuthManager:
             cursor.execute(
                 """
                 INSERT INTO users (email, password_hash, full_name, role,
-                                   email_verified, verification_code, verification_expires)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                   email_verified, verification_code, verification_expires,
+                                   must_change_password, verification_attempts, last_verification_sent)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (email.lower(), password_hash, full_name.strip(), role,
-                 verified, code, expires)
+                 verified, code, expires, 1 if must_change_password else 0,
+                 verification_attempts, last_verification_sent)
             )
             conn.commit()
             conn.close()
@@ -304,7 +378,10 @@ class AuthManager:
         conn = sqlite3.connect(self.DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT verification_code, verification_expires, email_verified FROM users WHERE email = ?",
+            """
+            SELECT verification_code, verification_expires, email_verified, verification_attempts
+            FROM users WHERE email = ?
+            """,
             (email.lower(),)
         )
         row = cursor.fetchone()
@@ -313,11 +390,15 @@ class AuthManager:
             conn.close()
             return False, "Account not found"
 
-        stored_code, expires_str, already_verified = row
+        stored_code, expires_str, already_verified, verification_attempts = row
 
         if already_verified:
             conn.close()
             return True, "Email already verified"
+
+        if verification_attempts >= MAX_VERIFICATION_ATTEMPTS:
+            conn.close()
+            return False, "Too many incorrect attempts. Please request a new code."
 
         if not stored_code or not expires_str:
             conn.close()
@@ -325,14 +406,26 @@ class AuthManager:
 
         if datetime.utcnow() > datetime.fromisoformat(expires_str):
             conn.close()
-            return False, "Verification code has expired. Please register again."
+            return False, "Verification code has expired. Please request a new code."
 
         if code.strip() != stored_code:
+            cursor.execute(
+                "UPDATE users SET verification_attempts = verification_attempts + 1 WHERE email = ?",
+                (email.lower(),)
+            )
+            conn.commit()
             conn.close()
             return False, "Invalid verification code"
 
         cursor.execute(
-            "UPDATE users SET email_verified = 1, verification_code = NULL, verification_expires = NULL WHERE email = ?",
+            """
+            UPDATE users
+            SET email_verified = 1,
+                verification_code = NULL,
+                verification_expires = NULL,
+                verification_attempts = 0
+            WHERE email = ?
+            """,
             (email.lower(),)
         )
         conn.commit()
@@ -344,7 +437,10 @@ class AuthManager:
         conn = sqlite3.connect(self.DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT full_name, email_verified FROM users WHERE email = ?",
+            """
+            SELECT full_name, email_verified, last_verification_sent
+            FROM users WHERE email = ?
+            """,
             (email.lower(),)
         )
         row = cursor.fetchone()
@@ -352,16 +448,30 @@ class AuthManager:
             conn.close()
             return False, "Account not found"
 
-        full_name, already_verified = row
+        full_name, already_verified, last_verification_sent = row
         if already_verified:
             conn.close()
             return True, "Email already verified"
 
+        if last_verification_sent:
+            last_sent = datetime.fromisoformat(last_verification_sent)
+            elapsed = (datetime.utcnow() - last_sent).total_seconds()
+            if elapsed < VERIFICATION_RESEND_COOLDOWN_SECONDS:
+                remaining = int(VERIFICATION_RESEND_COOLDOWN_SECONDS - elapsed)
+                conn.close()
+                return False, f"Please wait {remaining}s before requesting another code"
+
         code = self._generate_verification_code()
         expires = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+        now_iso = datetime.utcnow().isoformat()
         cursor.execute(
-            "UPDATE users SET verification_code = ?, verification_expires = ? WHERE email = ?",
-            (code, expires, email.lower())
+            """
+            UPDATE users
+            SET verification_code = ?, verification_expires = ?,
+                verification_attempts = 0, last_verification_sent = ?
+            WHERE email = ?
+            """,
+            (code, expires, now_iso, email.lower())
         )
         conn.commit()
         conn.close()
@@ -387,25 +497,62 @@ class AuthManager:
         if not user.email_verified:
             return False, None, "Email not verified. Please check your inbox for the verification code."
 
-        # Verify password
         conn = sqlite3.connect(self.DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT password_hash FROM users WHERE email = ?",
+            """
+            SELECT password_hash, failed_login_attempts, locked_until
+            FROM users WHERE email = ?
+            """,
             (email.lower(),)
         )
         row = cursor.fetchone()
-        conn.close()
 
         if not row:
+            conn.close()
             return False, None, "Invalid email or password"
 
-        password_hash = row[0]
+        password_hash, failed_attempts, locked_until = row
+
+        if locked_until:
+            lock_time = datetime.fromisoformat(locked_until)
+            if datetime.utcnow() < lock_time:
+                remaining = int((lock_time - datetime.utcnow()).total_seconds() // 60) + 1
+                conn.close()
+                return False, None, f"Account locked due to failed attempts. Try again in {remaining} minute(s)."
 
         if self._verify_password(password, password_hash):
+            cursor.execute(
+                "UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE email = ?",
+                (email.lower(),)
+            )
+            conn.commit()
+            conn.close()
             return True, user, "Login successful"
-        else:
-            return False, None, "Invalid email or password"
+
+        failed_attempts = (failed_attempts or 0) + 1
+        if failed_attempts >= MAX_LOGIN_ATTEMPTS:
+            lock_until = (datetime.utcnow() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)).isoformat()
+            cursor.execute(
+                """
+                UPDATE users
+                SET failed_login_attempts = 0,
+                    locked_until = ?
+                WHERE email = ?
+                """,
+                (lock_until, email.lower())
+            )
+            conn.commit()
+            conn.close()
+            return False, None, "Too many failed attempts. Account locked for 15 minutes."
+
+        cursor.execute(
+            "UPDATE users SET failed_login_attempts = ? WHERE email = ?",
+            (failed_attempts, email.lower())
+        )
+        conn.commit()
+        conn.close()
+        return False, None, "Invalid email or password"
 
     def get_user_by_email(self, email: str) -> Optional[User]:
         """Retrieve a user by email."""
@@ -413,7 +560,7 @@ class AuthManager:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT user_id, email, full_name, role, created_at, is_active, email_verified
+            SELECT user_id, email, full_name, role, created_at, is_active, email_verified, must_change_password
             FROM users WHERE email = ?
             """,
             (email.lower(),)
@@ -430,6 +577,7 @@ class AuthManager:
                 created_at=row[4],
                 is_active=bool(row[5]),
                 email_verified=bool(row[6]),
+                must_change_password=bool(row[7]),
             )
         return None
 
@@ -439,7 +587,7 @@ class AuthManager:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT user_id, email, full_name, role, created_at, is_active, email_verified
+            SELECT user_id, email, full_name, role, created_at, is_active, email_verified, must_change_password
             FROM users WHERE user_id = ?
             """,
             (user_id,)
@@ -456,6 +604,7 @@ class AuthManager:
                 created_at=row[4],
                 is_active=bool(row[5]),
                 email_verified=bool(row[6]),
+                must_change_password=bool(row[7]),
             )
         return None
 
@@ -465,7 +614,7 @@ class AuthManager:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT user_id, email, full_name, role, created_at, is_active, email_verified
+            SELECT user_id, email, full_name, role, created_at, is_active, email_verified, must_change_password
             FROM users ORDER BY created_at DESC
             """
         )
@@ -481,6 +630,7 @@ class AuthManager:
                 created_at=row[4],
                 is_active=bool(row[5]),
                 email_verified=bool(row[6]),
+                must_change_password=bool(row[7]),
             )
             for row in rows
         ]
@@ -577,7 +727,7 @@ class AuthManager:
         # Update password
         new_hash = self._hash_password(new_password)
         cursor.execute(
-            "UPDATE users SET password_hash = ? WHERE user_id = ?",
+            "UPDATE users SET password_hash = ?, must_change_password = 0 WHERE user_id = ?",
             (new_hash, user_id)
         )
         conn.commit()

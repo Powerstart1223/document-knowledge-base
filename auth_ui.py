@@ -178,50 +178,6 @@ _LOGIN_CSS = """
         color: #ffffff !important;
     }
 
-    /* Expander — for demo creds */
-    .streamlit-expanderHeader {
-        color: rgba(255, 255, 255, 0.35) !important;
-        font-size: 0.82rem !important;
-        background: transparent !important;
-        border: none !important;
-    }
-
-    .streamlit-expanderContent {
-        background: rgba(255, 255, 255, 0.03) !important;
-        border: 1px solid rgba(255, 255, 255, 0.06) !important;
-        border-radius: 12px !important;
-    }
-
-    /* Alerts */
-    .stAlert {
-        background: rgba(255, 255, 255, 0.05) !important;
-        border-radius: 12px !important;
-        border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    }
-
-    /* Demo creds card */
-    .demo-creds {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 10px;
-        padding: 0.85rem 1rem;
-        font-size: 0.82rem;
-        color: rgba(255, 255, 255, 0.45);
-        line-height: 1.7;
-    }
-
-    .demo-creds code {
-        background: rgba(212, 175, 55, 0.12);
-        color: #e8c84a;
-        padding: 0.1rem 0.35rem;
-        border-radius: 4px;
-        font-size: 0.8rem;
-    }
-
-    .demo-creds strong {
-        color: rgba(255, 255, 255, 0.6);
-    }
-
     /* Divider */
     .login-divider {
         border-top: 1px solid rgba(255, 255, 255, 0.06);
@@ -299,6 +255,10 @@ def render_login_page(auth_manager: AuthManager):
                 if success:
                     st.session_state.authenticated = True
                     st.session_state.current_user = user
+                    # Always land users on the primary workspace after login.
+                    st.session_state.show_settings = False
+                    st.session_state.show_knowledge_base = False
+                    st.session_state.workflow_mode = None
                     st.rerun()
                 else:
                     st.error(message)
@@ -310,16 +270,6 @@ def render_login_page(auth_manager: AuthManager):
     if st.button("Create Account", use_container_width=True):
         st.session_state.show_register = True
         st.rerun()
-
-    # Demo credentials — collapsed
-    with st.expander("Demo credentials"):
-        st.markdown(f"""
-        <div class="demo-creds">
-            <strong>Admin:</strong> <code>admin@{ALLOWED_DOMAIN}</code> / <code>Admin123!</code><br>
-            <em style="font-size: 0.78rem;">Change password after first login</em>
-        </div>
-        """, unsafe_allow_html=True)
-
     st.markdown('<div class="login-security">Encrypted & secure</div>', unsafe_allow_html=True)
 
 
@@ -590,6 +540,10 @@ def render_profile_settings(auth_manager: AuthManager, current_user: User):
     """, unsafe_allow_html=True)
 
     st.divider()
+
+    if current_user.must_change_password:
+        st.warning("Password update required before continuing. Please set a new password now.")
+
     st.subheader("Change Password")
 
     with st.form("change_password_form"):
@@ -612,6 +566,7 @@ def render_profile_settings(auth_manager: AuthManager, current_user: User):
                     current_user.user_id, old_password, new_password
                 )
                 if success:
+                    current_user.must_change_password = False
                     st.success(msg)
                 else:
                     st.error(msg)

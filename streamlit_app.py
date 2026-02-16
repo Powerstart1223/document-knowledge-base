@@ -11,6 +11,7 @@ Features:
 """
 
 import os
+import hashlib
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -134,7 +135,7 @@ _DEFAULTS = {
     "generated_text": "",
     "generated_title": "",
     "onboarding_complete": False,
-    "workflow_mode": None,  # None, "edit", or "create"
+    "workflow_mode": None,  # None, "create", "edit", or "learn"
     "show_settings": False,
     "show_knowledge_base": False,
 }
@@ -167,12 +168,14 @@ def get_knowledge_db():
 
 
 @st.cache_resource
-def get_background_scanner(_llm, _collection, _knowledge_db):
-    """Initialize and get the background scanner (cached)."""
+def get_background_scanner(user_id: int, _llm, _collection, _knowledge_db):
+    """Initialize and get the background scanner for the current user (manual/admin only)."""
     return ScannerManager.initialize(
+        user_id=user_id,
         llm=_llm,
         chroma_collection=_collection,
-        knowledge_db=_knowledge_db
+        knowledge_db=_knowledge_db,
+        auto_start=False,
     )
 
 
@@ -258,28 +261,43 @@ def process_uploaded_files(uploaded_files: List, document_type: str):
 
     for i, f in enumerate(uploaded_files):
         filename = f.name
-        file_key = f"{st.session_state.current_user.user_id}_{filename}"
-
-        if file_key in st.session_state.processed_files:
-            progress.progress((i + 1) / len(uploaded_files))
-            continue
+        user_id = st.session_state.current_user.user_id
 
         status.text(f"Processing {filename}...")
         try:
             text = extract_text_from_file(f)
+            if text.startswith("Error reading file:"):
+                st.error(text)
+                progress.progress((i + 1) / len(uploaded_files))
+                continue
+
+            content_hash = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()[:16]
+            file_key = f"{user_id}_{filename}_{content_hash}"
+
+            if file_key in st.session_state.processed_files:
+                progress.progress((i + 1) / len(uploaded_files))
+                continue
+
             chunks = chunk_text(text)
             if chunks:
-                ids = [f"{file_key}_chunk_{j}" for j in range(len(chunks))]
+                ids = [f"u{user_id}_{content_hash}_chunk_{j}" for j in range(len(chunks))]
                 metadatas = [
                     {
                         "source": filename,
                         "chunk_index": j,
                         "document_type": document_type,
-                        "user_id": st.session_state.current_user.user_id,
+                        "user_id": user_id,
+                        "content_hash": content_hash,
                     }
                     for j in range(len(chunks))
                 ]
-                collection.add(documents=chunks, ids=ids, metadatas=metadatas)
+
+                try:
+                    collection.delete(where={"$and": [{"source": filename}, {"user_id": user_id}]})
+                except Exception:
+                    pass
+
+                collection.upsert(documents=chunks, ids=ids, metadatas=metadatas)
                 total_chunks += len(chunks)
                 new_files += 1
                 st.session_state.processed_files.add(file_key)
@@ -288,7 +306,7 @@ def process_uploaded_files(uploaded_files: List, document_type: str):
             st.error(f"Error processing {filename}: {e}")
 
     if new_files:
-        st.toast(f"✅ Processed {new_files} file(s) into {total_chunks} chunks.", icon="✅")
+        st.toast(f"Processed {new_files} file(s) into {total_chunks} chunks.")
         st.success(f"Processed {new_files} file(s) into {total_chunks} chunks.")
     elif uploaded_files:
         st.info("All files have already been processed.")
@@ -380,85 +398,27 @@ def get_db_stats() -> dict:
 # ======================================================================
 
 def render_sidebar():
-    """Render the sidebar with user info and settings access."""
+    """Render generation-focused sidebar. Operational controls are admin-only."""
     current_user = st.session_state.current_user
 
-    # Auth sidebar section
     render_auth_sidebar(current_user)
 
-    # Settings button
-    st.markdown("""
-    <div class="card-header">
-        ⚙️ Quick Access
-    </div>
-    """, unsafe_allow_html=True)
-
-    if st.button("⚙️ Settings", use_container_width=True, key="sidebar_settings"):
-        st.session_state.show_settings = True
-        st.rerun()
-
-    if st.button("📚 Knowledge Base", use_container_width=True, key="sidebar_knowledge"):
-        st.session_state.show_knowledge_base = True
-        st.rerun()
-
-    st.divider()
-
-    # Knowledge Base Status
-    st.markdown("""
-    <div class="card-header">
-        📊 Knowledge Base
-    </div>
-    """, unsafe_allow_html=True)
-
-    try:
-        knowledge_db = get_knowledge_db()
-        stats = knowledge_db.get_stats()
-
-        st.markdown(f"""
-        <div style="font-size: 0.85rem; line-height: 1.8;">
-            <strong>{stats['total_documents']}</strong> documents indexed<br>
-            <strong>{stats['document_types']}</strong> document types learned
+    if current_user.is_admin():
+        st.markdown("""
+        <div class="card-header">
+            Admin
         </div>
         """, unsafe_allow_html=True)
 
-        # Get scanner status
-        scanner = ScannerManager.get_instance()
-        if scanner:
-            status = scanner.get_status()
-            if status["is_running"]:
-                if status.get("current_progress"):
-                    prog = status["current_progress"]
-                    st.caption(f"Scanning... {prog['current']}/{prog['total']}")
-                elif status.get("last_scan_end"):
-                    import dateutil.parser
-                    try:
-                        last_scan = dateutil.parser.parse(status["last_scan_end"])
-                        import datetime
-                        time_ago = datetime.datetime.now(datetime.timezone.utc) - last_scan
-                        minutes_ago = int(time_ago.total_seconds() / 60)
-                        st.caption(f"Last scan: {minutes_ago} min ago")
-                    except:
-                        st.caption("Scanner running")
-            else:
-                st.caption("Scanner stopped")
+        if st.button("Settings", use_container_width=True, key="sidebar_settings"):
+            st.session_state.show_settings = True
+            st.rerun()
 
-        if st.button("🔍 Scan Now", use_container_width=True, key="sidebar_scan_now"):
-            scanner = ScannerManager.get_instance()
-            if scanner:
-                scanner.trigger_scan()
-                st.toast("Scan triggered!", icon="🔍")
+        if st.button("Knowledge Base", use_container_width=True, key="sidebar_knowledge"):
+            st.session_state.show_knowledge_base = True
+            st.rerun()
 
-    except Exception as e:
-        st.caption("Knowledge base not initialized")
-
-    st.divider()
-
-    # Connection status
-    st.markdown("""
-    <div class="card-header">
-        🔌 Status
-    </div>
-    """, unsafe_allow_html=True)
+        st.divider()
 
     llm = get_llm()
     if llm.is_available():
@@ -1356,50 +1316,49 @@ def render_settings_tab():
 # ======================================================================
 
 def render_landing_page():
-    """Render the landing page with two main workflow options."""
-    st.markdown("""
-    <div style="max-width: 1000px; margin: 2rem auto;">
-        <div style="text-align: center; margin-bottom: 3rem;">
-            <h1 style="font-size: 2.5rem; margin-bottom: 1rem; color: var(--primary-navy);">
-                What would you like to do today?
-            </h1>
-            <p style="font-size: 1.1rem; color: var(--text-secondary);">
-                Choose your workflow to get started
-            </p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    """Post-login generation workspace focused on three primary tasks."""
+    st.markdown("## Document Workspace")
+    st.caption("Choose one of three tasks to continue.")
 
-    col1, col2 = st.columns(2, gap="large")
+    col1, col2, col3 = st.columns(3, gap="large")
 
     with col1:
         st.markdown("""
-        <div class="card" style="text-align: center; cursor: pointer; padding: 3rem 2rem; height: 100%;">
-            <div style="font-size: 4rem; margin-bottom: 1.5rem;">📝</div>
-            <h2 style="margin-bottom: 1rem; color: var(--primary-navy);">Edit an Existing Document</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 2rem; line-height: 1.6;">
-                Upload a document and use AI to make changes, revisions, or improvements
+        <div class="card" style="padding: 1.2rem; min-height: 210px;">
+            <h3 style="margin-top: 0;">New Document</h3>
+            <p style="color: var(--text-secondary); line-height: 1.5;">
+                Create a new legal document with your saved configuration preferences.
             </p>
         </div>
         """, unsafe_allow_html=True)
-
-        if st.button("Edit Existing Document", type="primary", use_container_width=True, key="btn_edit"):
-            st.session_state.workflow_mode = "edit"
+        if st.button("New Document", type="primary", use_container_width=True, key="home_new_doc"):
+            st.session_state.workflow_mode = "create"
             st.rerun()
 
     with col2:
         st.markdown("""
-        <div class="card" style="text-align: center; cursor: pointer; padding: 3rem 2rem; height: 100%;">
-            <div style="font-size: 4rem; margin-bottom: 1.5rem;">✨</div>
-            <h2 style="margin-bottom: 1rem; color: var(--primary-navy);">Create a New Document</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 2rem; line-height: 1.6;">
-                Generate a professional legal document from scratch using AI templates
+        <div class="card" style="padding: 1.2rem; min-height: 210px;">
+            <h3 style="margin-top: 0;">Review / Manage Existing</h3>
+            <p style="color: var(--text-secondary); line-height: 1.5;">
+                Edit an uploaded document in-screen with live prompting and export results.
             </p>
         </div>
         """, unsafe_allow_html=True)
+        if st.button("Review / Manage", type="primary", use_container_width=True, key="home_review_doc"):
+            st.session_state.workflow_mode = "edit"
+            st.rerun()
 
-        if st.button("Create New Document", type="primary", use_container_width=True, key="btn_create"):
-            st.session_state.workflow_mode = "create"
+    with col3:
+        st.markdown("""
+        <div class="card" style="padding: 1.2rem; min-height: 210px;">
+            <h3 style="margin-top: 0;">Learn from a Document</h3>
+            <p style="color: var(--text-secondary); line-height: 1.5;">
+                Upload examples to improve retrieval and future draft quality.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("Learn from Document", type="primary", use_container_width=True, key="home_learn_doc"):
+            st.session_state.workflow_mode = "learn"
             st.rerun()
 
 
@@ -1408,39 +1367,35 @@ def render_landing_page():
 # ======================================================================
 
 def render_edit_workflow():
-    """Path A: Upload → Preview → AI Chat → Edit → Export."""
+    """Executive edit flow with intent presets and checkpointed revisions."""
 
-    # Back button
-    if st.button("← Back to Home", key="back_from_edit"):
+    if st.button("Back to Home", key="back_from_edit"):
         st.session_state.workflow_mode = None
         st.session_state.pop("edit_document_text", None)
         st.session_state.pop("edit_document_history", None)
         st.session_state.pop("edit_chat_messages", None)
+        st.session_state.pop("edit_revision_goal", None)
         st.rerun()
 
-    st.markdown("""
-    <div class="card-header">
-        📝 Edit an Existing Document
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("## Edit Existing Document")
+    st.caption("Step 1 upload, Step 2 set revision objective, Step 3 apply targeted AI changes.")
 
-    # Step 1: Upload (if not already uploaded)
+    if "edit_revision_goal" not in st.session_state:
+        st.session_state.edit_revision_goal = "Preserve structure; improve precision and legal clarity."
+
     if "edit_document_text" not in st.session_state:
+        st.progress(0.33)
         st.markdown("""
-        <div style="max-width: 800px; margin: 2rem auto;">
-            <h3>Upload Your Document</h3>
-            <p style="color: var(--text-secondary);">
-                Upload a document you'd like to edit. The AI will help you make changes,
-                revisions, or improvements.
-            </p>
+        <div class="info-card">
+            Upload one document to begin. The assistant maintains full-document continuity for each revision.
         </div>
         """, unsafe_allow_html=True)
 
         uploaded_file = st.file_uploader(
-            "Choose a document",
+            "Upload document",
             type=["pdf", "docx", "txt"],
             key="edit_upload",
-            help="Upload a PDF, DOCX, or TXT file"
+            help="Supported: PDF, DOCX, TXT"
         )
 
         if uploaded_file:
@@ -1448,158 +1403,175 @@ def render_edit_workflow():
                 text = extract_text_from_file(uploaded_file)
 
             if len(text) < 50:
-                st.error("Document appears to be too short or unreadable. Please upload a valid document.")
+                st.error("Document appears too short or unreadable. Upload a valid file.")
             else:
                 st.session_state.edit_document_text = text
                 st.session_state.edit_document_original = text
                 st.session_state.edit_document_history = [{"version": 0, "text": text, "change": "Original document"}]
                 st.session_state.edit_chat_messages = []
                 st.session_state.edit_filename = uploaded_file.name
-                st.success(f"✅ Loaded {len(text)} characters from {uploaded_file.name}")
+                st.session_state.edit_file_ext = ("." + uploaded_file.name.split(".")[-1].lower()) if "." in uploaded_file.name else ".txt"
+                st.success(f"Loaded {uploaded_file.name}")
                 st.rerun()
         return
 
-    # Step 2+: Preview and Edit Interface
+    st.progress(0.66)
     st.markdown(f"""
     <div class="info-card">
         <strong>Document:</strong> {st.session_state.get('edit_filename', 'Untitled')}<br>
-        <strong>Length:</strong> {len(st.session_state.edit_document_text)} characters<br>
-        <strong>Version:</strong> {len(st.session_state.edit_document_history)}
+        <strong>Version:</strong> {len(st.session_state.edit_document_history)}<br>
+        <strong>Length:</strong> {len(st.session_state.edit_document_text)} characters
     </div>
     """, unsafe_allow_html=True)
 
-    # Two-column layout: Preview (left) | AI Assistant (right)
+    preset_col, objective_col = st.columns([2, 3], gap="large")
+    with preset_col:
+        st.markdown("#### Revision Preset")
+        preset = st.radio(
+            "Choose preset",
+            options=["Tighten", "Formalize", "Clarify", "Shorten", "Custom"],
+            index=4,
+            key="edit_preset_radio",
+            label_visibility="collapsed"
+        )
+        if preset == "Tighten":
+            st.session_state.edit_revision_goal = "Reduce verbosity and tighten clause language without changing legal meaning."
+        elif preset == "Formalize":
+            st.session_state.edit_revision_goal = "Use formal legal register and improve professional tone."
+        elif preset == "Clarify":
+            st.session_state.edit_revision_goal = "Clarify ambiguous provisions and improve definitional precision."
+        elif preset == "Shorten":
+            st.session_state.edit_revision_goal = "Shorten text where possible while preserving obligations and risk protections."
+
+    with objective_col:
+        st.markdown("#### Current Objective")
+        st.session_state.edit_revision_goal = st.text_area(
+            "Revision objective",
+            value=st.session_state.edit_revision_goal,
+            height=120,
+            label_visibility="collapsed",
+            key="edit_goal_area",
+            help="This objective is applied to each AI revision request."
+        )
+        if len(st.session_state.edit_revision_goal.strip()) < 12:
+            st.caption("Add more detail for higher-quality revisions.")
+
     col_preview, col_ai = st.columns([3, 2], gap="large")
 
     with col_preview:
-        st.markdown("""
-        <div class="card-header">
-            📄 Document Preview & Edit
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Editable preview
+        st.markdown("### Working Draft")
         edited_text = st.text_area(
-            "Edit document directly:",
+            "Working draft",
             value=st.session_state.edit_document_text,
-            height=500,
+            height=560,
             key="edit_preview_area",
             label_visibility="collapsed"
         )
-
-        # If user manually edited, update the text
         if edited_text != st.session_state.edit_document_text:
             st.session_state.edit_document_text = edited_text
 
-        # Control buttons
-        col_undo, col_export, col_new = st.columns([1, 1, 1])
+        a, b, c = st.columns(3)
+        with a:
+            if len(st.session_state.edit_document_history) > 1 and st.button("Undo", use_container_width=True, key="edit_undo"):
+                st.session_state.edit_document_history.pop()
+                st.session_state.edit_document_text = st.session_state.edit_document_history[-1]["text"]
+                st.rerun()
+        with b:
+            original_name = st.session_state.get("edit_filename", "document")
+            ext = st.session_state.get("edit_file_ext", ".txt")
+            base_name = original_name.rsplit(".", 1)[0] if "." in original_name else original_name
 
-        with col_undo:
-            if len(st.session_state.edit_document_history) > 1:
-                if st.button("↶ Undo", use_container_width=True):
-                    st.session_state.edit_document_history.pop()
-                    last = st.session_state.edit_document_history[-1]
-                    st.session_state.edit_document_text = last["text"]
-                    st.toast("Undo successful", icon="↶")
-                    st.rerun()
-
-        with col_export:
-            docx_bytes = DocumentGenerator.text_to_docx(
-                st.session_state.edit_document_text,
-                st.session_state.get('edit_filename', 'Edited_Document')
-            )
-            st.download_button(
-                label="⬇️ Download .docx",
-                data=docx_bytes,
-                file_name=f"{st.session_state.get('edit_filename', 'document')}_edited.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True
-            )
-
-        with col_new:
-            if st.button("🔄 Start Over", use_container_width=True):
+            if ext == ".txt":
+                st.download_button(
+                    label="Download .txt",
+                    data=st.session_state.edit_document_text.encode("utf-8"),
+                    file_name=f"{base_name}_edited.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+            else:
+                docx_bytes = DocumentGenerator.text_to_docx(
+                    st.session_state.edit_document_text,
+                    original_name
+                )
+                st.download_button(
+                    label="Download .docx",
+                    data=docx_bytes,
+                    file_name=f"{base_name}_edited.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
+                if ext == ".pdf":
+                    st.caption("Original was PDF. Export is provided as editable DOCX.")
+        with c:
+            if st.button("Reset", use_container_width=True, key="edit_reset"):
                 st.session_state.pop("edit_document_text", None)
                 st.session_state.pop("edit_document_history", None)
                 st.session_state.pop("edit_chat_messages", None)
                 st.rerun()
 
-        # Version history
         if len(st.session_state.edit_document_history) > 1:
-            with st.expander("📜 Version History"):
-                for i, version in enumerate(reversed(st.session_state.edit_document_history)):
-                    st.caption(f"**v{version['version']}:** {version['change']}")
+            with st.expander("Revision checkpoints"):
+                for version in reversed(st.session_state.edit_document_history):
+                    st.caption(f"v{version['version']}: {version['change']}")
 
     with col_ai:
-        st.markdown("""
-        <div class="card-header">
-            🤖 AI Assistant
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("### AI Revision Assistant")
+        st.caption("Use specific instructions. The assistant returns a full revised document each time.")
 
-        st.caption("Ask the AI to make changes to your document:")
+        q1, q2 = st.columns(2)
+        with q1:
+            if st.button("Strengthen indemnity", use_container_width=True, key="edit_quick_indemnity"):
+                st.session_state.edit_chat_messages.append({"role": "user", "content": "Strengthen indemnity language and tighten risk allocation."})
+        with q2:
+            if st.button("Clarify termination", use_container_width=True, key="edit_quick_termination"):
+                st.session_state.edit_chat_messages.append({"role": "user", "content": "Clarify termination triggers and cure periods."})
 
-        # Chat history
         for msg in st.session_state.edit_chat_messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        # Chat input
-        if prompt := st.chat_input("E.g., 'Make this more formal' or 'Add a confidentiality clause'"):
+        if prompt := st.chat_input("Example: Clarify notice mechanics and align defined terms"):
             st.session_state.edit_chat_messages.append({"role": "user", "content": prompt})
 
-            with st.chat_message("user"):
-                st.markdown(prompt)
-
+        if st.session_state.edit_chat_messages and st.session_state.edit_chat_messages[-1]["role"] == "user":
+            pending_prompt = st.session_state.edit_chat_messages[-1]["content"]
             with st.chat_message("assistant"):
-                with st.spinner("AI is processing your request..."):
+                with st.spinner("Applying revision..."):
                     llm = get_llm()
-
                     messages = [
                         {
                             "role": "system",
                             "content": (
-                                "You are a legal document editing assistant. The user will provide "
-                                "a current document and request changes. Apply the requested changes "
-                                "and return the FULL updated document text. Be precise and maintain "
-                                "the document's structure unless asked to change it."
+                                "You are a legal document editing assistant. Return the FULL revised document. "
+                                "Preserve enforceability and structure unless explicitly asked to alter them."
                             )
                         },
                         {
                             "role": "user",
                             "content": (
+                                f"Revision objective: {st.session_state.edit_revision_goal}\n\n"
                                 f"Current document:\n\n{st.session_state.edit_document_text}\n\n"
-                                f"User request: {prompt}\n\n"
-                                "Please provide the full updated document with the requested changes applied."
+                                f"Change request: {pending_prompt}\n\n"
+                                "Return only the full updated document text."
                             )
                         }
                     ]
-
                     try:
                         response = llm.chat(messages, temperature=0.2, max_tokens=4096)
-
-                        # Update document
                         version_num = len(st.session_state.edit_document_history)
                         st.session_state.edit_document_text = response
                         st.session_state.edit_document_history.append({
                             "version": version_num,
                             "text": response,
-                            "change": prompt[:50] + ("..." if len(prompt) > 50 else "")
+                            "change": pending_prompt[:72] + ("..." if len(pending_prompt) > 72 else "")
                         })
-
-                        st.markdown("✅ Changes applied to the document!")
-                        st.session_state.edit_chat_messages.append({
-                            "role": "assistant",
-                            "content": "✅ Changes applied to the document!"
-                        })
+                        st.session_state.edit_chat_messages.append({"role": "assistant", "content": "Revision applied."})
                         st.rerun()
-
                     except Exception as e:
-                        error_msg = f"Error: {str(e)}"
-                        st.error(error_msg)
-                        st.session_state.edit_chat_messages.append({
-                            "role": "assistant",
-                            "content": error_msg
-                        })
+                        err = f"Error: {e}"
+                        st.error(err)
+                        st.session_state.edit_chat_messages.append({"role": "assistant", "content": err})
 
 
 # ======================================================================
@@ -1607,364 +1579,306 @@ def render_edit_workflow():
 # ======================================================================
 
 def render_create_workflow():
-    """Path B: Doc Type Selection → Dynamic Fields → Generate → Preview/Edit → Export."""
+    """Create flow with short setup wizard + guided drafting workspace."""
 
-    # Back button
-    if st.button("← Back to Home", key="back_from_create"):
+    if st.button("Back to Home", key="back_from_create"):
         st.session_state.workflow_mode = None
-        st.session_state.pop("create_doc_type", None)
-        st.session_state.pop("create_fields", None)
-        st.session_state.pop("create_generated_text", None)
-        st.session_state.pop("create_chat_messages", None)
+        for k in [
+            "create_setup_complete", "create_setup_goal", "create_setup_style", "create_setup_guidance",
+            "create_doc_type", "create_doc_type_label", "create_fields", "create_generated_text", "create_chat_messages"
+        ]:
+            st.session_state.pop(k, None)
         st.rerun()
 
-    st.markdown("""
-    <div class="card-header">
-        ✨ Create a New Document
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("## Create New Document")
+    st.caption("Hybrid guidance: quick setup, targeted fact capture, then focused drafting.")
 
-    # Step 1: Document Type Selection
-    if "create_doc_type" not in st.session_state:
+    if not st.session_state.get("create_setup_complete", False):
+        st.progress(0.33)
         st.markdown("""
-        <div style="max-width: 1400px; margin: 1.5rem auto;">
-            <h3 style="text-align: center; margin-bottom: 1.5rem;">Select Document Type</h3>
+        <div class="info-card">
+            <strong>Step 1 of 3:</strong> Set drafting defaults. You can revise these later.
         </div>
         """, unsafe_allow_html=True)
 
-        # Search/Filter bar
-        search_query = st.text_input(
-            "🔍 Search document types...",
-            placeholder="Search by name or keyword (e.g., employment, lease, IP)",
-            key="doc_type_search",
-            label_visibility="collapsed"
-        )
+        with st.form("create_setup_form"):
+            goal = st.selectbox(
+                "Drafting goal",
+                ["Board-ready first draft", "Client-ready polished draft", "Fast internal draft"],
+                index=0,
+                help="Controls drafting strictness and polish level."
+            )
+            style_pref = st.selectbox(
+                "Style source",
+                ["Learned templates first (recommended)", "Standard template library", "Custom freeform"],
+                index=0,
+                help="Controls how much the assistant relies on known template patterns."
+            )
+            guidance_pref = st.selectbox("Guidance level", ["Inline guidance", "Minimal guidance"], index=0)
 
-        # Comprehensive document type catalog organized by category
-        doc_types_catalog = {
-            "Corporate & Business": {
-                "Contract / Agreement": {"icon": "📜", "desc": "General contracts and agreements"},
-                "Shareholder Agreement": {"icon": "📊", "desc": "Rights and obligations among shareholders"},
-                "Partnership Agreement": {"icon": "🤝", "desc": "Business partnership terms"},
-                "Stock Purchase Agreement": {"icon": "💰", "desc": "Purchase and sale of stock"},
-                "Asset Purchase Agreement": {"icon": "🏪", "desc": "Purchase and sale of assets"},
-                "Merger Agreement": {"icon": "🔀", "desc": "Terms for company mergers"},
-                "Franchise Agreement": {"icon": "🏬", "desc": "Franchising rights and obligations"},
-                "Consulting Agreement": {"icon": "💼", "desc": "Professional consulting services"},
-                "Service Level Agreement (SLA)": {"icon": "📈", "desc": "Service expectations and metrics"},
-                "Board Resolution": {"icon": "📋", "desc": "Formal board decisions"},
-            },
-            "Employment & HR": {
-                "Employment Agreement": {"icon": "💼", "desc": "Full-time employment contract"},
-                "Independent Contractor Agreement": {"icon": "🤝", "desc": "Contract for contractors"},
-                "Offer Letter": {"icon": "📧", "desc": "Formal job offer"},
-                "Severance Agreement": {"icon": "🎁", "desc": "Employment separation terms"},
-                "Non-Compete Agreement": {"icon": "🚫", "desc": "Restrict employee competition"},
-                "Employee Handbook": {"icon": "📖", "desc": "Company policies and procedures"},
-            },
-            "Real Estate & Property": {
-                "Commercial Lease Agreement": {"icon": "🏢", "desc": "Lease for commercial property"},
-                "Residential Lease Agreement": {"icon": "🏠", "desc": "Lease for residential property"},
-                "Purchase and Sale Agreement (Real Estate)": {"icon": "🏡", "desc": "Real estate purchase contract"},
-                "Property Management Agreement": {"icon": "🔑", "desc": "Property management services"},
-            },
-            "Intellectual Property": {
-                "NDA / Confidentiality Agreement": {"icon": "🔒", "desc": "Protect confidential information"},
-                "Patent Assignment Agreement": {"icon": "🔬", "desc": "Transfer of patent rights"},
-                "Trademark License Agreement": {"icon": "™️", "desc": "License to use a trademark"},
-                "Copyright Assignment": {"icon": "©️", "desc": "Transfer of copyright ownership"},
-                "Software License Agreement": {"icon": "💻", "desc": "License to use software"},
-            },
-            "Litigation & Court": {
-                "Legal Brief / Motion": {"icon": "⚖️", "desc": "Court filings and briefs"},
-                "Settlement Agreement": {"icon": "⚖️", "desc": "Resolve legal disputes"},
-                "Retainer Agreement (Legal Services)": {"icon": "👔", "desc": "Attorney-client engagement"},
-            },
-            "Financial & Investment": {
-                "Promissory Note": {"icon": "💵", "desc": "Written promise to pay"},
-                "Loan Agreement": {"icon": "🏦", "desc": "Comprehensive loan contract"},
-                "Investment Agreement (SAFE/Convertible Note)": {"icon": "🚀", "desc": "Startup investment documents"},
-            },
-            "General / Other": {
-                "Legal Memorandum": {"icon": "📋", "desc": "Internal legal analysis"},
-                "Corporate Filing": {"icon": "📑", "desc": "Articles, reports, certificates"},
-                "Letter / Correspondence": {"icon": "✉️", "desc": "Legal letters"},
-                "Operating Agreement / LLC": {"icon": "🏢", "desc": "LLC formation and governance"},
-                "Power of Attorney": {"icon": "🖋️", "desc": "Grant authority to act"},
-                "Arbitration Agreement": {"icon": "🤝", "desc": "Binding arbitration terms"},
-                "Website Terms of Service": {"icon": "🌐", "desc": "Legal terms for website"},
-                "Custom Document": {"icon": "✏️", "desc": "Describe your custom needs"},
-            },
-        }
-
-        # Filter documents based on search query
-        if search_query:
-            filtered_catalog = {}
-            query_lower = search_query.lower()
-            for category, docs in doc_types_catalog.items():
-                matching_docs = {
-                    name: info for name, info in docs.items()
-                    if query_lower in name.lower() or query_lower in info['desc'].lower()
-                }
-                if matching_docs:
-                    filtered_catalog[category] = matching_docs
-        else:
-            filtered_catalog = doc_types_catalog
-
-        # Display categorized document grid
-        if not filtered_catalog:
-            st.warning(f"No document types found matching '{search_query}'. Try a different search term.")
-        else:
-            for category, documents in filtered_catalog.items():
-                st.markdown(f"""
-                <div style="margin-top: 2rem; margin-bottom: 1rem;">
-                    <h4 style="color: var(--primary-navy); border-bottom: 2px solid var(--accent-gold); padding-bottom: 0.5rem;">
-                        {category}
-                    </h4>
-                </div>
-                """, unsafe_allow_html=True)
-
-                # Create grid layout (4 columns)
-                cols = st.columns(4)
-                for idx, (doc_name, doc_info) in enumerate(documents.items()):
-                    with cols[idx % 4]:
-                        st.markdown(f"""
-                        <div class="card" style="text-align: center; min-height: 160px; padding: 1.25rem;">
-                            <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">{doc_info['icon']}</div>
-                            <h4 style="margin-bottom: 0.4rem; font-size: 0.9rem; line-height: 1.3;">{doc_name}</h4>
-                            <p style="color: var(--text-secondary); font-size: 0.75rem; margin-bottom: 1rem;">
-                                {doc_info['desc']}
-                            </p>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                        if st.button("Select", key=f"select_{doc_name.replace(' ', '_').replace('/', '_').replace('(', '').replace(')', '')}", use_container_width=True):
-                            st.session_state.create_doc_type = doc_name
-                            st.session_state.create_doc_type_label = doc_name
-                            # Generate fields dynamically
-                            with st.spinner("Loading template..."):
-                                llm = get_llm()
-                                generator = DocumentGenerator(llm, get_collection(), knowledge_db=get_knowledge_db())
-                                fields = generator.get_required_fields_for_type(doc_name)
-                                st.session_state.create_fields = fields
-                                # Check if this is a learned template
-                                st.session_state.create_is_learned = any(f.get("learned") for f in fields)
-                            st.rerun()
-
+            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+            if submitted:
+                st.session_state.create_setup_complete = True
+                st.session_state.create_setup_goal = goal
+                st.session_state.create_setup_style = style_pref
+                st.session_state.create_setup_guidance = guidance_pref
+                st.rerun()
         return
 
-    # Step 2: Field Form (if not generated yet)
-    if "create_generated_text" not in st.session_state:
-        # Check if this is a learned template
-        is_learned = st.session_state.get("create_is_learned", False)
+    if "create_doc_type" not in st.session_state:
+        st.progress(0.66)
+        st.markdown("""
+        <div class="info-card">
+            <strong>Step 2 of 3:</strong> Select document type.
+        </div>
+        """, unsafe_allow_html=True)
 
-        if is_learned:
-            st.markdown(f"""
-            <div class="success-card">
-                <strong>Document Type:</strong> {st.session_state.create_doc_type_label}<br>
-                📚 <strong>Learned from your document library</strong> — This template was automatically generated from real documents in your knowledge base.
-            </div>
-            """, unsafe_allow_html=True)
+        search_query = st.text_input(
+            "Search document types",
+            placeholder="employment, lease, nda, board resolution",
+            key="doc_type_search_exec"
+        ).strip().lower()
+
+        doc_options = list(DOCUMENT_TYPES.keys()) + ["custom_document"]
+        filtered = [
+            d for d in doc_options
+            if not search_query
+            or search_query in d.lower()
+            or (d in DOCUMENT_TYPES and search_query in DOCUMENT_TYPES[d]["label"].lower())
+        ]
+        if not filtered:
+            st.warning("No document types match your search.")
+            return
+
+        selected = st.selectbox(
+            "Document type",
+            options=filtered,
+            format_func=lambda d: "Custom Document" if d == "custom_document" else DOCUMENT_TYPES[d]["label"],
+            key="create_doc_type_pick"
+        )
+
+        if selected == "custom_document":
+            st.caption("Describe requirements and generate a custom legal draft.")
         else:
-            st.markdown(f"""
-            <div class="info-card">
-                <strong>Document Type:</strong> {st.session_state.create_doc_type_label}
-            </div>
-            """, unsafe_allow_html=True)
+            st.caption(DOCUMENT_TYPES[selected]["description"])
 
-        st.markdown("### 📋 Document Information")
-        st.caption("Fill in the details below. The AI will use this information to generate your document.")
+        if st.button("Use This Document Type", type="primary", use_container_width=True, key="create_doc_type_confirm"):
+            if selected == "custom_document":
+                st.session_state.create_doc_type = selected
+                st.session_state.create_doc_type_label = "Custom Document"
+                with st.spinner("Loading dynamic template fields..."):
+                    llm = get_llm()
+                    generator = DocumentGenerator(llm, get_collection(), knowledge_db=get_knowledge_db())
+                    fields = generator.get_required_fields_for_type("Custom Document")
+                    st.session_state.create_fields = fields
+                    st.session_state.create_is_learned = any(f.get("learned") for f in fields)
+            else:
+                st.session_state.create_doc_type = selected
+                st.session_state.create_doc_type_label = DOCUMENT_TYPES[selected]["label"]
+                st.session_state.create_fields = DOCUMENT_TYPES[selected]["fields"]
+                st.session_state.create_is_learned = False
+            st.rerun()
+        return
 
-        # Dynamic form based on LLM-generated fields
+    if "create_generated_text" not in st.session_state:
+        st.progress(1.0)
+        st.markdown("""
+        <div class="info-card">
+            <strong>Step 3 of 3:</strong> Provide key facts. Leave unknown values blank and revise after generation.
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div class="card">
+            <strong>Drafting goal:</strong> {st.session_state.get('create_setup_goal')}<br>
+            <strong>Style source:</strong> {st.session_state.get('create_setup_style')}<br>
+            <strong>Guidance:</strong> {st.session_state.get('create_setup_guidance')}
+        </div>
+        """, unsafe_allow_html=True)
+
         with st.form("create_doc_form"):
             form_data = {}
             fields = st.session_state.create_fields
+            st.caption(f"Complete the fields that are known now. Total fields: {len(fields)}")
 
-            # Group fields by category (simple heuristic)
             for field in fields:
                 key = field.get("key", "field")
-                label = field.get("label", key.title())
+                label = field.get("label", key.replace("_", " ").title())
                 field_type = field.get("type", "text")
                 placeholder = field.get("placeholder", "")
                 help_text = field.get("help", "")
 
                 if field_type == "date":
-                    form_data[key] = st.date_input(
-                        label,
-                        value=date.today(),
-                        key=f"create_{key}",
-                        help=help_text
-                    )
+                    form_data[key] = st.date_input(label, value=date.today(), key=f"create_{key}", help=help_text)
                 elif field_type == "textarea":
-                    form_data[key] = st.text_area(
-                        label,
-                        placeholder=placeholder,
-                        height=100,
-                        key=f"create_{key}",
-                        help=help_text
-                    )
+                    form_data[key] = st.text_area(label, placeholder=placeholder, height=100, key=f"create_{key}", help=help_text)
                 else:
-                    form_data[key] = st.text_input(
-                        label,
-                        placeholder=placeholder,
-                        key=f"create_{key}",
-                        help=help_text
-                    )
+                    form_data[key] = st.text_input(label, placeholder=placeholder, key=f"create_{key}", help=help_text)
 
-            st.divider()
-            submitted = st.form_submit_button(
-                "✨ Generate Document",
-                type="primary",
-                use_container_width=True
-            )
-
+            submitted = st.form_submit_button("Generate Draft", type="primary", use_container_width=True)
             if submitted:
                 llm = get_llm()
                 if not llm.is_available():
                     st.error("LLM is not available. Check Settings.")
                 else:
-                    with st.spinner("Generating your document... this may take 30-60 seconds."):
+                    with st.spinner("Generating draft..."):
                         try:
                             collection = get_collection()
                             generator = DocumentGenerator(llm, collection, knowledge_db=get_knowledge_db())
-
-                            # Map to standard doc type if possible
                             doc_type = st.session_state.create_doc_type
+
+                            generation_context = {
+                                "draft_goal": st.session_state.get("create_setup_goal", ""),
+                                "style_source": st.session_state.get("create_setup_style", ""),
+                                "guidance_level": st.session_state.get("create_setup_guidance", ""),
+                            }
+                            form_payload = {**form_data, **generation_context}
+
                             if doc_type in DOCUMENT_TYPES:
-                                text = generator.generate(doc_type, form_data, use_sec=False)
+                                text_out = generator.generate(doc_type, form_payload, use_sec=False)
                             else:
-                                # Custom document type — use generic prompt
                                 system_prompt = (
-                                    f"You are a legal document drafting assistant. Generate a professional "
-                                    f"{st.session_state.create_doc_type_label}. Use formal legal language with "
-                                    f"numbered sections. Include standard boilerplate clauses as appropriate. "
-                                    f"This is a draft for attorney review, not legal advice."
+                                    "You are a legal document drafting assistant. Generate a professional legal draft "
+                                    "using formal, structured language. This draft is for attorney review, not legal advice."
                                 )
-                                param_list = "\n".join([f"{k}: {v}" for k, v in form_data.items() if v])
-                                user_prompt = f"Generate a {st.session_state.create_doc_type_label} with:\n\n{param_list}"
-                                text = llm.generate_document(system_prompt, user_prompt)
+                                params = "\n".join([f"{k}: {v}" for k, v in form_payload.items() if v])
+                                user_prompt = f"Generate a {st.session_state.create_doc_type_label} with:\n\n{params}"
+                                text_out = llm.generate_document(system_prompt, user_prompt)
 
-                            st.session_state.create_generated_text = text
+                            st.session_state.create_generated_text = text_out
                             st.session_state.create_chat_messages = []
-                            st.toast("✅ Document generated!", icon="✅")
                             st.rerun()
-
                         except Exception as e:
                             st.error(f"Generation failed: {e}")
-
         return
 
-    # Step 3: Preview & Edit with AI Chat
     st.markdown(f"""
     <div class="info-card">
-        <strong>Document Type:</strong> {st.session_state.create_doc_type_label}
+        <strong>Draft:</strong> {st.session_state.create_doc_type_label}<br>
+        <strong>Objective:</strong> {st.session_state.get('create_setup_goal')}
     </div>
     """, unsafe_allow_html=True)
 
     col_preview, col_ai = st.columns([3, 2], gap="large")
-
     with col_preview:
-        st.markdown("""
-        <div class="card-header">
-            📄 Document Preview & Edit
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Editable preview
+        st.markdown("### Draft Workspace")
         edited_text = st.text_area(
-            "Edit document:",
+            "Draft",
             value=st.session_state.create_generated_text,
-            height=500,
+            height=560,
             key="create_preview_area",
             label_visibility="collapsed"
         )
-
         if edited_text != st.session_state.create_generated_text:
             st.session_state.create_generated_text = edited_text
 
-        # Controls
-        col_regen, col_export, col_new = st.columns([1, 1, 1])
-
-        with col_regen:
-            if st.button("🔄 Start Over", use_container_width=True):
-                st.session_state.pop("create_doc_type", None)
-                st.session_state.pop("create_generated_text", None)
+        a, b, c = st.columns(3)
+        with a:
+            if st.button("Start Over", use_container_width=True, key="create_start_over_exec"):
+                for k in ["create_doc_type", "create_fields", "create_generated_text", "create_chat_messages"]:
+                    st.session_state.pop(k, None)
                 st.rerun()
-
-        with col_export:
+        with b:
             docx_bytes = DocumentGenerator.text_to_docx(
                 st.session_state.create_generated_text,
                 st.session_state.create_doc_type_label
             )
             st.download_button(
-                label="⬇️ Download .docx",
+                label="Download .docx",
                 data=docx_bytes,
                 file_name=f"{st.session_state.create_doc_type_label.replace(' ', '_')}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True
             )
+        with c:
+            if st.button("Re-run Guidance", use_container_width=True, key="create_rerun_setup"):
+                st.session_state.create_setup_complete = False
+                st.rerun()
 
     with col_ai:
-        st.markdown("""
-        <div class="card-header">
-            🤖 AI Assistant
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("### AI Revision Assistant")
+        st.caption("Request targeted improvements. The assistant returns a full updated draft.")
 
-        st.caption("Request revisions or changes:")
+        q1, q2 = st.columns(2)
+        with q1:
+            if st.button("Sharpen recitals", use_container_width=True, key="create_quick_recitals"):
+                st.session_state.create_chat_messages.append({"role": "user", "content": "Sharpen recitals and improve narrative clarity without changing legal effect."})
+        with q2:
+            if st.button("Harden remedies", use_container_width=True, key="create_quick_remedies"):
+                st.session_state.create_chat_messages.append({"role": "user", "content": "Harden remedies and default provisions while keeping the current structure."})
 
-        # Chat history
         for msg in st.session_state.get("create_chat_messages", []):
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        # Chat input
-        if prompt := st.chat_input("E.g., 'Add a termination clause' or 'Make the payment terms clearer'"):
+        if prompt := st.chat_input("Example: tighten indemnity language and simplify definitions"):
             if "create_chat_messages" not in st.session_state:
                 st.session_state.create_chat_messages = []
-
             st.session_state.create_chat_messages.append({"role": "user", "content": prompt})
 
-            with st.chat_message("user"):
-                st.markdown(prompt)
-
+        if st.session_state.get("create_chat_messages") and st.session_state.create_chat_messages[-1]["role"] == "user":
+            pending_prompt = st.session_state.create_chat_messages[-1]["content"]
             with st.chat_message("assistant"):
-                with st.spinner("AI is revising..."):
+                with st.spinner("Applying revisions..."):
                     llm = get_llm()
                     messages = [
                         {
                             "role": "system",
-                            "content": (
-                                "You are a legal document editing assistant. Apply the user's requested "
-                                "changes and return the FULL updated document."
-                            )
+                            "content": "You are a legal document editing assistant. Apply requested changes and return the FULL updated document."
                         },
                         {
                             "role": "user",
                             "content": (
+                                f"Draft objective: {st.session_state.get('create_setup_goal')}\n\n"
                                 f"Current document:\n\n{st.session_state.create_generated_text}\n\n"
-                                f"User request: {prompt}\n\n"
-                                "Provide the full updated document."
+                                f"Revision request: {pending_prompt}\n\n"
+                                "Return only the full updated document."
                             )
                         }
                     ]
-
                     try:
                         response = llm.chat(messages, temperature=0.2, max_tokens=4096)
                         st.session_state.create_generated_text = response
-                        st.markdown("✅ Changes applied!")
-                        st.session_state.create_chat_messages.append({
-                            "role": "assistant",
-                            "content": "✅ Changes applied!"
-                        })
+                        st.session_state.create_chat_messages.append({"role": "assistant", "content": "Revision applied."})
                         st.rerun()
                     except Exception as e:
-                        error_msg = f"Error: {str(e)}"
-                        st.error(error_msg)
-                        st.session_state.create_chat_messages.append({
-                            "role": "assistant",
-                            "content": error_msg
-                        })
+                        err = f"Error: {e}"
+                        st.error(err)
+                        st.session_state.create_chat_messages.append({"role": "assistant", "content": err})
+
+
+# ======================================================================
+# PATH C: Learn from a Document Workflow
+# ======================================================================
+
+def render_learn_workflow():
+    """Learn from uploaded documents to improve future generation quality."""
+
+    if st.button("Back to Home", key="back_from_learn"):
+        st.session_state.workflow_mode = None
+        st.rerun()
+
+    st.markdown("## Learn from a Document")
+    st.caption("Upload examples to enrich your knowledge base and improve drafting relevance.")
+
+    uploaded_files = st.file_uploader(
+        "Upload one or more documents",
+        type=["pdf", "docx", "txt"],
+        accept_multiple_files=True,
+        key="learn_upload_docs",
+        help="These files will be indexed for retrieval and style matching.",
+    )
+
+    doc_type = st.selectbox(
+        "Learning category",
+        options=["reference"] + list(DOCUMENT_TYPES.keys()),
+        format_func=lambda x: "Reference (general)" if x == "reference" else DOCUMENT_TYPES[x]["label"],
+        key="learn_doc_type",
+    )
+
+    if uploaded_files and st.button("Learn from Uploaded Documents", type="primary", use_container_width=True, key="learn_process_btn"):
+        process_uploaded_files(uploaded_files, document_type=doc_type)
+        st.success("Learning completed. These documents are now available for retrieval.")
 
 
 # ======================================================================
@@ -2095,6 +2009,11 @@ def render_settings_page():
 def render_knowledge_base_page():
     """Render the Knowledge Base management page."""
 
+    current_user = st.session_state.current_user
+    if not current_user.is_admin():
+        st.error("Access denied. Knowledge Base management is admin-only.")
+        return
+
     # Back button
     if st.button("← Back", key="back_from_kb"):
         st.session_state.show_knowledge_base = False
@@ -2107,7 +2026,16 @@ def render_knowledge_base_page():
     """, unsafe_allow_html=True)
 
     knowledge_db = get_knowledge_db()
-    stats = knowledge_db.get_stats()
+    # Lazy-init scanner only on Knowledge Base page (admin/manual use).
+    scanner = ScannerManager.get_instance(current_user.user_id)
+    if scanner is None:
+        try:
+            scanner = get_background_scanner(current_user.user_id, get_llm(), get_collection(), knowledge_db)
+        except Exception as e:
+            logger.error(f"Failed to initialize scanner on KB page: {e}")
+            scanner = None
+
+    stats = knowledge_db.get_stats(user_id=current_user.user_id)
 
     # Overview stats
     col1, col2, col3, col4 = st.columns(4)
@@ -2150,7 +2078,7 @@ def render_knowledge_base_page():
         st.markdown("### Learned Document Templates")
         st.caption("Templates automatically learned from your real documents")
 
-        doc_types = knowledge_db.get_all_document_types()
+        doc_types = knowledge_db.get_all_document_types(user_id=current_user.user_id)
 
         if not doc_types:
             st.info("No learned templates yet. Run a scan to build templates from your documents.")
@@ -2160,7 +2088,7 @@ def render_knowledge_base_page():
                 count = type_info["count"]
 
                 with st.expander(f"📄 {doc_type} — Learned from {count} documents"):
-                    learned = knowledge_db.get_learned_template(doc_type)
+                    learned = knowledge_db.get_learned_template(doc_type, user_id=current_user.user_id)
 
                     if learned:
                         st.caption(f"Last updated: {learned['last_updated']}")
@@ -2189,7 +2117,7 @@ def render_knowledge_base_page():
             )
 
             if selected_type:
-                files = knowledge_db.get_scanned_files_by_type(selected_type)
+                files = knowledge_db.get_scanned_files_by_type(selected_type, user_id=current_user.user_id)
 
                 st.caption(f"Found {len(files)} documents")
 
@@ -2209,7 +2137,7 @@ def render_knowledge_base_page():
     with kb_tab3:
         st.markdown("### Scanner Configuration")
 
-        scanner = ScannerManager.get_instance()
+        scanner = ScannerManager.get_instance(current_user.user_id)
         if scanner:
             status = scanner.get_status()
 
@@ -2235,41 +2163,30 @@ def render_knowledge_base_page():
                 st.markdown(f"{icon} `{path}`")
 
             st.divider()
-
             st.markdown("#### Manual Controls")
 
-            col_a, col_b, col_c = st.columns(3)
+            col_a, col_b = st.columns(2)
 
             with col_a:
-                if st.button("🔍 Scan Now", type="primary", use_container_width=True):
-                    scanner.trigger_scan()
-                    st.toast("Scan triggered!", icon="🔍")
+                if st.button("Run Scan Now", type="primary", use_container_width=True):
+                    with st.spinner("Running scan..."):
+                        scanner.run_scan_once()
+                    st.success("Scan completed")
                     st.rerun()
 
             with col_b:
-                if status["is_running"]:
-                    if st.button("⏸️ Stop Scanner", use_container_width=True):
-                        scanner.stop()
-                        st.toast("Scanner stopped", icon="⏸️")
-                        st.rerun()
-                else:
-                    if st.button("▶️ Start Scanner", use_container_width=True):
-                        scanner.start()
-                        st.toast("Scanner started", icon="▶️")
-                        st.rerun()
-
-            with col_c:
-                if st.button("🔄 Rebuild Templates", use_container_width=True):
+                if st.button("Rebuild Templates", use_container_width=True):
                     with st.spinner("Rebuilding learned templates..."):
                         llm = get_llm()
                         collection = get_collection()
                         scanner_instance = DocumentScanner(
                             llm=llm,
                             chroma_collection=collection,
-                            knowledge_db=knowledge_db
+                            knowledge_db=knowledge_db,
+                            user_id=current_user.user_id,
                         )
                         scanner_instance.build_learned_templates()
-                        st.success("Templates rebuilt!")
+                        st.success("Templates rebuilt")
                         st.rerun()
 
             st.divider()
@@ -2295,7 +2212,7 @@ def render_knowledge_base_page():
     with kb_tab4:
         st.markdown("### Recent Scan History")
 
-        history = knowledge_db.get_scan_history(limit=20)
+        history = knowledge_db.get_scan_history(limit=20, user_id=current_user.user_id)
 
         if not history:
             st.info("No scan history yet.")
@@ -2349,6 +2266,12 @@ def main():
     # User is authenticated
     current_user = st.session_state.current_user
 
+    if current_user.must_change_password:
+        st.warning("Password update required. You can continue, but update it from Settings -> Profile.")
+        if st.button("Go to Password Settings", key="force_pw_change_cta"):
+            st.session_state.show_settings = True
+            st.rerun()
+
     # Auto-connect all users to the host's Ollama instance (no onboarding needed)
     # Only show onboarding wizard if explicitly using OpenAI with no key set
     if not st.session_state.get("onboarding_complete", False):
@@ -2361,12 +2284,9 @@ def main():
         else:
             st.session_state.onboarding_complete = True
 
-    # Render header
-    render_header(
-        title="Corporate Law Document Generator",
-        subtitle=f"AI-powered legal document generation and knowledge base",
-        user_info=current_user.to_dict()
-    )
+    # Render clean plain header
+    st.title("Corporate Law Document Generator")
+    st.caption("Document generation workspace")
 
     # Check LLM availability
     llm = get_llm()
@@ -2399,15 +2319,6 @@ def main():
             </div>
             """, unsafe_allow_html=True)
 
-    # Initialize background scanner (cached)
-    try:
-        knowledge_db = get_knowledge_db()
-        collection = get_collection()
-        scanner = get_background_scanner(llm, collection, knowledge_db)
-    except Exception as e:
-        logger.error(f"Failed to initialize background scanner: {e}")
-        scanner = None
-
     # Render sidebar with Settings access
     render_sidebar()
 
@@ -2418,7 +2329,11 @@ def main():
 
     # Check if knowledge base page should be shown
     if st.session_state.get("show_knowledge_base"):
-        render_knowledge_base_page()
+        if current_user.is_admin():
+            render_knowledge_base_page()
+        else:
+            st.error("Access denied. Knowledge Base management is admin-only.")
+            st.session_state.show_knowledge_base = False
         return
 
     # Main workflow routing
@@ -2428,8 +2343,9 @@ def main():
         render_edit_workflow()
     elif workflow_mode == "create":
         render_create_workflow()
+    elif workflow_mode == "learn":
+        render_learn_workflow()
     else:
-        # Show landing page
         render_landing_page()
 
     # Render footer

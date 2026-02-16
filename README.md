@@ -1,17 +1,17 @@
-# Corporate Law Document Generator v2.0
+﻿# Corporate Law Document Generator v2.0
 
 A RAG-powered legal document generation system with AI-assisted drafting, built for corporate law firms and legal departments.
 
-## ✨ What's New in v2.0
+## âœ¨ What's New in v2.0
 
-### 🔐 Multi-User Authentication
+### ðŸ” Multi-User Authentication
 - **User Registration & Login** - Secure authentication with bcrypt password hashing
 - **Role-Based Access** - Admin and user roles with different permissions
 - **Per-User Data Isolation** - Each user has their own document collection and chat history
 - **Admin Panel** - Manage users, activate/deactivate accounts, and assign roles
 - **Session Management** - Secure, persistent sessions with logout functionality
 
-### 🎨 Modern UX Overhaul
+### ðŸŽ¨ Modern UX Overhaul
 - **Professional Theme** - Clean, corporate design with navy and gold color scheme
 - **Card-Based Layouts** - Modern, organized interface with smooth transitions
 - **Improved Chat UI** - Beautiful chat bubbles with better message styling
@@ -32,7 +32,7 @@ A RAG-powered legal document generation system with AI-assisted drafting, built 
 - **Cloud & Local Deployment** - Works with OpenAI (cloud) or Ollama (local)
 - **Professional Output** - Export to formatted .docx with proper legal document structure
 
-## Quick Start — Local Development
+## Quick Start â€” Local Development
 
 1. **Install dependencies:**
    ```bash
@@ -55,13 +55,13 @@ A RAG-powered legal document generation system with AI-assisted drafting, built 
    - Default admin credentials:
      - Email: `admin@lawfirm.com`
      - Password: `Admin123!`
-   - **⚠️ Change the password immediately after first login!**
+   - **âš ï¸ Change the password immediately after first login!**
 
 5. **Create additional users:**
    - Click "Create Account" on login screen
    - Or use Admin panel to manage users
 
-## Quick Start — Streamlit Cloud Deployment
+## Quick Start â€” Streamlit Cloud Deployment
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed instructions.
 
@@ -115,7 +115,7 @@ Generate professional legal documents using AI:
 3. **Review and Download**:
    - Preview the generated draft
    - Download as .docx with proper formatting
-   - All documents include disclaimer: "DRAFT — FOR ATTORNEY REVIEW ONLY"
+   - All documents include disclaimer: "DRAFT â€” FOR ATTORNEY REVIEW ONLY"
 
 ## External Integrations
 
@@ -134,18 +134,18 @@ Generate professional legal documents using AI:
 
 ```
 document-knowledge-base/
-├── streamlit_app.py          # Main Streamlit application
-├── llm_backend.py            # LLM abstraction (Ollama/OpenAI)
-├── document_generator.py     # Document generation pipeline
-├── api_clients.py            # External API clients (SEC EDGAR, etc.)
-├── requirements.txt          # Python dependencies
-├── .env.example              # Environment variables template
-├── .streamlit/
-│   ├── config.toml           # Streamlit configuration
-│   └── secrets.toml.example  # Secrets template (for Streamlit Cloud)
-├── chroma_db/                # ChromaDB vector storage (created at runtime)
-├── uploads/                  # Uploaded documents (created at runtime)
-└── DEPLOYMENT.md             # Deployment guide
+â”œâ”€â”€ streamlit_app.py          # Main Streamlit application
+â”œâ”€â”€ llm_backend.py            # LLM abstraction (Ollama/OpenAI)
+â”œâ”€â”€ document_generator.py     # Document generation pipeline
+â”œâ”€â”€ api_clients.py            # External API clients (SEC EDGAR, etc.)
+â”œâ”€â”€ requirements.txt          # Python dependencies
+â”œâ”€â”€ .env.example              # Environment variables template
+â”œâ”€â”€ .streamlit/
+â”‚   â”œâ”€â”€ config.toml           # Streamlit configuration
+â”‚   â””â”€â”€ secrets.toml.example  # Secrets template (for Streamlit Cloud)
+â”œâ”€â”€ chroma_db/                # ChromaDB vector storage (created at runtime)
+â”œâ”€â”€ uploads/                  # Uploaded documents (created at runtime)
+â””â”€â”€ DEPLOYMENT.md             # Deployment guide
 ```
 
 ## How it Works
