@@ -10,207 +10,160 @@ from auth import AuthManager, init_session_state, logout, User, ALLOWED_DOMAIN
 
 _LOGIN_CSS = """
 <style>
-    /* Hide sidebar and reset padding on auth pages */
-    section[data-testid="stSidebar"] { display: none; }
-    header[data-testid="stHeader"] { background: #0f1923; }
+    section[data-testid="stSidebar"] { display: none !important; }
+
+    .stApp {
+        background: linear-gradient(180deg, #ffffff 0%, #f8faf8 100%);
+    }
 
     .main .block-container {
-        max-width: 440px;
+        max-width: 520px;
         margin: 0 auto;
         padding-top: 8vh;
-        padding-bottom: 4rem;
+        padding-bottom: 2rem;
     }
 
-    /* Dark background on the whole page */
-    .stApp {
-        background: linear-gradient(160deg, #0f1923 0%, #1a2a3a 40%, #243447 100%);
-    }
-
-    /* Brand section */
     .login-brand {
         text-align: center;
-        margin-bottom: 2rem;
-        padding-top: 1rem;
+        margin-bottom: 1.3rem;
     }
 
     .login-brand .logo-icon {
-        width: 56px;
-        height: 56px;
-        background: linear-gradient(135deg, #d4af37 0%, #f0d878 100%);
-        border-radius: 16px;
+        width: 52px;
+        height: 52px;
+        background: #0f1720;
+        color: #ffffff;
+        border-radius: 14px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.75rem;
-        margin-bottom: 1.25rem;
-        box-shadow: 0 8px 24px rgba(212, 175, 55, 0.25);
+        font-size: 1.5rem;
+        margin-bottom: 0.95rem;
     }
 
     .login-brand h1 {
-        color: #ffffff;
-        font-size: 1.5rem;
-        font-weight: 600;
-        letter-spacing: -0.03em;
-        margin: 0 0 0.35rem 0;
+        color: #121212;
+        font-size: 1.45rem;
+        font-weight: 750;
+        letter-spacing: -0.02em;
+        margin: 0 0 0.2rem 0;
     }
 
     .login-brand p {
-        color: rgba(255, 255, 255, 0.4);
-        font-size: 0.875rem;
+        color: #414141;
+        font-size: 0.88rem;
         margin: 0;
     }
 
-    /* Section header for form */
     .form-header {
         text-align: center;
-        margin-bottom: 1.25rem;
+        margin-bottom: 1rem;
     }
 
     .form-header h2 {
-        color: rgba(255, 255, 255, 0.85);
-        font-size: 1.1rem;
-        font-weight: 500;
+        color: #1f1f1f;
+        font-size: 1.02rem;
+        font-weight: 650;
         margin: 0;
     }
 
-    /* Override Streamlit input/button styles for dark theme */
     .stTextInput label {
-        color: rgba(255, 255, 255, 0.55) !important;
-        font-size: 0.78rem !important;
-        font-weight: 500 !important;
-        letter-spacing: 0.04em !important;
+        color: #2f2f2f !important;
+        font-size: 0.74rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.06em !important;
         text-transform: uppercase !important;
     }
 
-    /* Force dark inputs — override all Streamlit specificity */
     .stApp .stTextInput > div > div > input,
-    .stApp .stTextInput input,
     .stApp input[type="text"],
     .stApp input[type="password"],
-    .stApp input[type="email"],
     [data-testid="stTextInput"] input,
-    [data-baseweb="input"] input,
-    [data-baseweb="base-input"] input {
-        background: rgba(255, 255, 255, 0.06) !important;
-        background-color: rgba(255, 255, 255, 0.06) !important;
-        border: 1px solid rgba(255, 255, 255, 0.12) !important;
-        border-radius: 12px !important;
-        color: #ffffff !important;
-        padding: 0.85rem 1rem !important;
-        font-size: 0.95rem !important;
-        transition: all 0.2s ease !important;
-        -webkit-text-fill-color: #ffffff !important;
+    [data-baseweb="input"] input {
+        background: #ffffff !important;
+        border: 1px solid #b8beb8 !important;
+        border-radius: 10px !important;
+        color: #121212 !important;
+        padding: 0.74rem 0.86rem !important;
+        font-size: 0.92rem !important;
+        -webkit-text-fill-color: #121212 !important;
     }
 
     .stApp .stTextInput > div > div > input:focus,
     .stApp input[type="text"]:focus,
     .stApp input[type="password"]:focus,
-    [data-testid="stTextInput"] input:focus,
-    [data-baseweb="input"] input:focus {
-        border-color: rgba(212, 175, 55, 0.5) !important;
-        box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.1) !important;
-        background: rgba(255, 255, 255, 0.09) !important;
-        background-color: rgba(255, 255, 255, 0.09) !important;
+    [data-testid="stTextInput"] input:focus {
+        border-color: #0f1720 !important;
+        box-shadow: 0 0 0 3px rgba(15, 23, 32, 0.08) !important;
     }
 
-    .stApp .stTextInput > div > div > input::placeholder,
     .stApp input::placeholder,
     [data-baseweb="input"] input::placeholder {
-        color: rgba(255, 255, 255, 0.2) !important;
-        -webkit-text-fill-color: rgba(255, 255, 255, 0.2) !important;
+        color: #7a7a7a !important;
     }
 
-    /* Also style the input container/wrapper from BaseWeb */
-    [data-baseweb="base-input"],
-    [data-baseweb="input"] {
-        background-color: rgba(255, 255, 255, 0.06) !important;
-        border-color: rgba(255, 255, 255, 0.12) !important;
-        border-radius: 12px !important;
-    }
-
-    /* Password toggle icon */
-    [data-testid="stTextInput"] button {
-        color: rgba(255, 255, 255, 0.4) !important;
-    }
-
-    /* Primary button — gold (override Streamlit red default) */
     .stButton > button[kind="primary"],
     .stFormSubmitButton > button,
-    .stFormSubmitButton > button[kind="primary"],
-    button[kind="primaryFormSubmit"],
-    .stFormSubmitButton button {
-        background: linear-gradient(135deg, #d4af37 0%, #e8c84a 100%) !important;
-        background-color: #d4af37 !important;
-        color: #0f1923 !important;
-        border: none !important;
-        border-radius: 12px !important;
-        padding: 0.85rem 1.5rem !important;
-        font-weight: 600 !important;
-        font-size: 0.95rem !important;
-        letter-spacing: 0.01em !important;
-        box-shadow: 0 4px 16px rgba(212, 175, 55, 0.3) !important;
-        transition: all 0.25s ease !important;
+    .stFormSubmitButton > button[kind="primary"] {
+        background: #171717 !important;
+        color: #ffffff !important;
+        border: 1px solid #171717 !important;
+        border-radius: 999px !important;
+        min-height: 2.18rem !important;
+        font-size: 0.8rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.04em !important;
+        padding: 0.32rem 1rem !important;
     }
 
     .stButton > button[kind="primary"]:hover,
-    .stFormSubmitButton > button:hover,
-    .stFormSubmitButton > button[kind="primary"]:hover {
-        transform: translateY(-1px) !important;
-        box-shadow: 0 8px 24px rgba(212, 175, 55, 0.4) !important;
-        background: linear-gradient(135deg, #e8c84a 0%, #d4af37 100%) !important;
+    .stFormSubmitButton > button:hover {
+        background: #000000 !important;
     }
 
-    /* Secondary buttons — ghost style */
     .stButton > button:not([kind="primary"]) {
-        background: transparent !important;
-        color: rgba(255, 255, 255, 0.55) !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        border-radius: 12px !important;
-        padding: 0.75rem 1.5rem !important;
-        font-weight: 500 !important;
-        font-size: 0.9rem !important;
-        transition: all 0.2s ease !important;
+        background: #ffffff !important;
+        color: #161616 !important;
+        border: 1px solid #b8beb8 !important;
+        border-radius: 999px !important;
+        min-height: 2.12rem !important;
+        font-size: 0.78rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.04em !important;
+        padding: 0.32rem 1rem !important;
     }
 
     .stButton > button:not([kind="primary"]):hover {
-        background: rgba(255, 255, 255, 0.04) !important;
-        border-color: rgba(255, 255, 255, 0.2) !important;
-        color: #ffffff !important;
+        background: #f1f4f1 !important;
     }
 
-    /* Divider */
     .login-divider {
-        border-top: 1px solid rgba(255, 255, 255, 0.06);
-        margin: 1.5rem 0;
+        border-top: 1px solid #d5d9d5;
+        margin: 1.05rem 0;
     }
 
-    /* Footer */
     .login-security {
         text-align: center;
-        margin-top: 1.5rem;
-        color: rgba(255, 255, 255, 0.2);
+        margin-top: 1.05rem;
+        color: #606060;
         font-size: 0.75rem;
-        letter-spacing: 0.02em;
     }
 
-    /* Password requirements */
     .pw-reqs {
-        color: rgba(255, 255, 255, 0.3);
+        color: #5b5b5b;
         font-size: 0.78rem;
-        line-height: 1.7;
+        line-height: 1.55;
         margin-top: 0.25rem;
     }
 
-    /* Caption override */
     .stCaption, small {
-        color: rgba(255, 255, 255, 0.3) !important;
+        color: #626262 !important;
     }
 </style>
 """
 
-
 def render_login_page(auth_manager: AuthManager):
-    """Render a sleek, Sigma-inspired login page."""
+    """Render a clean, high-contrast login page."""
 
     st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
 
@@ -274,7 +227,7 @@ def render_login_page(auth_manager: AuthManager):
 
 
 def render_registration_page(auth_manager: AuthManager):
-    """Render a sleek, Sigma-inspired registration page."""
+    """Render a clean, high-contrast registration page."""
 
     st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
 
@@ -291,7 +244,7 @@ def render_registration_page(auth_manager: AuthManager):
     """, unsafe_allow_html=True)
 
     st.markdown(f"""
-    <div style="text-align:center; color: rgba(255,255,255,0.4); font-size: 0.82rem; margin-bottom: 1rem;">
+    <div style="text-align:center; color: #4a4a4a; font-size: 0.82rem; margin-bottom: 1rem;">
         Only <strong style="color:#d4af37;">@{ALLOWED_DOMAIN}</strong> email addresses are permitted
     </div>
     """, unsafe_allow_html=True)
@@ -381,7 +334,7 @@ def render_verification_page(auth_manager: AuthManager):
     """, unsafe_allow_html=True)
 
     st.markdown(f"""
-    <div style="text-align:center; color: rgba(255,255,255,0.5); font-size: 0.88rem; margin-bottom: 1.25rem;">
+    <div style="text-align:center; color: #4a4a4a; font-size: 0.88rem; margin-bottom: 1.25rem;">
         We sent a 6-digit code to <strong style="color:#d4af37;">{email}</strong>
     </div>
     """, unsafe_allow_html=True)
@@ -455,6 +408,7 @@ def render_admin_panel(auth_manager: AuthManager, current_user: User):
     with col3:
         st.metric("Administrators", admin_users)
 
+    st.caption("Manage account status and role assignments. Changes apply immediately.")
     st.divider()
 
     for user in users:
@@ -462,12 +416,8 @@ def render_admin_panel(auth_manager: AuthManager, current_user: User):
             col1, col2, col3, col4, col5 = st.columns([3, 2, 1.5, 1.5, 1.5])
 
             with col1:
-                st.markdown(f"""
-                **{user.full_name}**
-                <span style="color: var(--text-secondary); font-size: 0.875rem;">
-                {user.email}
-                </span>
-                """, unsafe_allow_html=True)
+                st.markdown(f"**{user.full_name}**")
+                st.caption(user.email)
 
             with col2:
                 role_color = "var(--accent-gold)" if user.is_admin() else "var(--text-secondary)"
@@ -509,7 +459,7 @@ def render_admin_panel(auth_manager: AuthManager, current_user: User):
             with col5:
                 if user.user_id != current_user.user_id:
                     new_role = "user" if user.is_admin() else "admin"
-                    role_text = "-> User" if user.is_admin() else "-> Admin"
+                    role_text = "Make User" if user.is_admin() else "Make Admin"
                     if st.button(role_text, key=f"role_{user.user_id}", use_container_width=True):
                         success, msg = auth_manager.change_user_role(user.user_id, new_role)
                         if success:
@@ -518,6 +468,8 @@ def render_admin_panel(auth_manager: AuthManager, current_user: User):
                         else:
                             st.error(msg)
 
+            if user.user_id == current_user.user_id:
+                st.caption("Current account: role/status changes are disabled for this row.")
             st.caption(f"Joined: {user.created_at[:10]}")
             st.divider()
 
@@ -545,6 +497,7 @@ def render_profile_settings(auth_manager: AuthManager, current_user: User):
         st.warning("Password update required before continuing. Please set a new password now.")
 
     st.subheader("Change Password")
+    st.caption("Use at least 8 characters and include upper/lowercase letters, a number, and a special character.")
 
     with st.form("change_password_form"):
         old_password = st.text_input("Current Password", type="password", key="old_pass")
@@ -568,6 +521,7 @@ def render_profile_settings(auth_manager: AuthManager, current_user: User):
                 if success:
                     current_user.must_change_password = False
                     st.success(msg)
+                    st.caption("Password updated. Use your new password on the next sign-in.")
                 else:
                     st.error(msg)
 

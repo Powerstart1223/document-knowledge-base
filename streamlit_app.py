@@ -11,6 +11,10 @@ Features:
 """
 
 import os
+import io
+import re
+import html as html_lib
+import difflib
 import hashlib
 from dotenv import load_dotenv
 load_dotenv()
@@ -56,7 +60,7 @@ st.set_page_config(
     page_title="Corporate Law Document Generator",
     page_icon="⚖️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # Apply custom CSS
@@ -221,17 +225,21 @@ def get_sec_client() -> SECEdgarClient:
 # File processing
 # ======================================================================
 
-def extract_text_from_file(uploaded_file) -> str:
-    """Extract text from an uploaded .txt, .pdf, or .docx file."""
+def extract_text_from_file(uploaded_file, filename: str | None = None) -> str:
+    """Extract text from an uploaded .txt, .pdf, .docx, or .docm file."""
     try:
-        name = uploaded_file.name.lower()
+        name = (filename or getattr(uploaded_file, "name", "")).lower()
+        if hasattr(uploaded_file, "seek"):
+            uploaded_file.seek(0)
+
         if name.endswith(".txt"):
-            return str(uploaded_file.read(), "utf-8")
+            raw = uploaded_file.read()
+            return raw.decode("utf-8", errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
         elif name.endswith(".pdf"):
             import PyPDF2
             reader = PyPDF2.PdfReader(uploaded_file)
             return "\n".join(page.extract_text() or "" for page in reader.pages)
-        elif name.endswith(".docx"):
+        elif name.endswith(".docx") or name.endswith(".docm"):
             import docx
             doc = docx.Document(uploaded_file)
             return "\n".join(p.text for p in doc.paragraphs)
@@ -239,6 +247,125 @@ def extract_text_from_file(uploaded_file) -> str:
             return "Unsupported file type."
     except Exception as e:
         return f"Error reading file: {e}"
+
+
+def build_diff_highlight_html(original_text: str, revised_text: str) -> tuple[str, int, int]:
+    """Return inline HTML diff and non-whitespace token counts (adds, deletes)."""
+
+    def _tokenize(text: str) -> list[str]:
+        return re.findall(r"\s+|[A-Za-z0-9_]+|[^\w\s]", text or "")
+
+    old_tokens = _tokenize(original_text)
+    new_tokens = _tokenize(revised_text)
+    sm = difflib.SequenceMatcher(a=old_tokens, b=new_tokens)
+
+    html_parts: list[str] = []
+    add_count = 0
+    del_count = 0
+
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "equal":
+            html_parts.append(html_lib.escape("".join(new_tokens[j1:j2])))
+        elif op == "insert":
+            inserted = "".join(new_tokens[j1:j2])
+            add_count += sum(1 for t in new_tokens[j1:j2] if t.strip())
+            html_parts.append(
+                f"<span style='background:#d9fbe2;color:#0b3d20;padding:0 0.08rem;border-radius:2px;'>{html_lib.escape(inserted)}</span>"
+            )
+        elif op == "delete":
+            deleted = "".join(old_tokens[i1:i2])
+            del_count += sum(1 for t in old_tokens[i1:i2] if t.strip())
+            html_parts.append(
+                f"<span style='background:#ffe1e1;color:#7d1515;text-decoration:line-through;padding:0 0.08rem;border-radius:2px;'>{html_lib.escape(deleted)}</span>"
+            )
+        elif op == "replace":
+            deleted = "".join(old_tokens[i1:i2])
+            inserted = "".join(new_tokens[j1:j2])
+            del_count += sum(1 for t in old_tokens[i1:i2] if t.strip())
+            add_count += sum(1 for t in new_tokens[j1:j2] if t.strip())
+            html_parts.append(
+                f"<span style='background:#ffe1e1;color:#7d1515;text-decoration:line-through;padding:0 0.08rem;border-radius:2px;'>{html_lib.escape(deleted)}</span>"
+            )
+            html_parts.append(
+                f"<span style='background:#d9fbe2;color:#0b3d20;padding:0 0.08rem;border-radius:2px;'>{html_lib.escape(inserted)}</span>"
+            )
+
+    return "".join(html_parts), add_count, del_count
+
+
+def infer_document_type_from_description(description: str) -> tuple[str, str]:
+    """Infer best document type key from a natural language description."""
+    desc = (description or "").strip()
+    if not desc:
+        return "custom_document", "No description provided"
+
+    option_lines = [f"- {k}: {v.get('label', k)}" for k, v in DOCUMENT_TYPES.items()]
+    option_block = "\n".join(option_lines)
+
+    try:
+        llm = get_llm()
+        if llm.is_available():
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You classify legal drafting requests. Return only one key from the list "
+                        "or custom_document if uncertain."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Available keys:\n{option_block}\n\n"
+                        f"Request description:\n{desc}\n\n"
+                        "Return only the best key."
+                    ),
+                },
+            ]
+            raw = llm.chat(messages, temperature=0.0, max_tokens=32).strip().lower()
+            key = raw.split()[0].strip("`.,:;\"' ") if raw else ""
+            if key in DOCUMENT_TYPES:
+                return key, "Detected by model"
+            if key == "custom_document":
+                return key, "Model requested custom flow"
+    except Exception:
+        pass
+
+    d = desc.lower()
+    fallback_rules = [
+        ("contract", ["agreement", "contract", "vendor", "services", "msa", "sow"]),
+        ("memo", ["memo", "memorandum", "internal analysis", "legal analysis"]),
+        ("brief", ["brief", "motion", "argument", "court filing"]),
+        ("corporate_filing", ["incorporation", "annual report", "amendment", "filing", "sec"]),
+        ("nda", ["nda", "non-disclosure", "confidentiality"]),
+        ("employment", ["employment", "employee", "offer letter", "termination"]),
+        ("lease", ["lease", "rent", "landlord", "tenant"]),
+    ]
+
+    for key, words in fallback_rules:
+        if key in DOCUMENT_TYPES and any(w in d for w in words):
+            return key, "Detected by keyword rules"
+
+    return "custom_document", "Defaulted to custom flow"
+
+
+def render_workflow_header(title: str, subtitle: str, *, progress: float | None = None, step_note: str | None = None):
+    """Render a consistent workflow header with optional progress + step note."""
+    safe_title = html_lib.escape(title or "")
+    safe_subtitle = html_lib.escape(subtitle or "")
+    st.markdown(
+        f"""
+        <div class="workspace-hero">
+            <h2>{safe_title}</h2>
+            <p>{safe_subtitle}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if step_note:
+        st.caption(step_note)
+    if progress is not None:
+        st.progress(progress)
 
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
@@ -258,6 +385,8 @@ def process_uploaded_files(uploaded_files: List, document_type: str):
     status = st.empty()
     total_chunks = 0
     new_files = 0
+    skipped_files = 0
+    failed_files = 0
 
     for i, f in enumerate(uploaded_files):
         filename = f.name
@@ -268,6 +397,7 @@ def process_uploaded_files(uploaded_files: List, document_type: str):
             text = extract_text_from_file(f)
             if text.startswith("Error reading file:"):
                 st.error(text)
+                failed_files += 1
                 progress.progress((i + 1) / len(uploaded_files))
                 continue
 
@@ -275,6 +405,7 @@ def process_uploaded_files(uploaded_files: List, document_type: str):
             file_key = f"{user_id}_{filename}_{content_hash}"
 
             if file_key in st.session_state.processed_files:
+                skipped_files += 1
                 progress.progress((i + 1) / len(uploaded_files))
                 continue
 
@@ -304,14 +435,22 @@ def process_uploaded_files(uploaded_files: List, document_type: str):
             progress.progress((i + 1) / len(uploaded_files))
         except Exception as e:
             st.error(f"Error processing {filename}: {e}")
+            failed_files += 1
 
     if new_files:
         st.toast(f"Processed {new_files} file(s) into {total_chunks} chunks.")
         st.success(f"Processed {new_files} file(s) into {total_chunks} chunks.")
     elif uploaded_files:
         st.info("All files have already been processed.")
+
     progress.empty()
     status.empty()
+    return {
+        "new_files": new_files,
+        "total_chunks": total_chunks,
+        "skipped_files": skipped_files,
+        "failed_files": failed_files,
+    }
 
 
 # ======================================================================
@@ -1166,33 +1305,23 @@ def render_settings_tab():
     # LLM Provider Settings
     with settings_tab1:
         st.markdown("""
-        <div class="card-header">
-            🤖 AI Language Model
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("""
         <div class="info-card">
-            The AI language model powers document generation and Q&A. Choose your preferred provider.
+            The AI language model powers document generation and editing. Choose your preferred provider.
         </div>
         """, unsafe_allow_html=True)
 
         provider = st.radio(
             "Select AI Provider",
             options=["ollama", "openai"],
-            format_func=lambda p: "🏠 Ollama (Free, runs locally)" if p == "ollama" else "☁️ OpenAI (Cloud-based, paid API)",
+            format_func=lambda p: "Ollama (Local, free)" if p == "ollama" else "OpenAI (Cloud API)",
             index=0 if st.session_state.llm_provider == "ollama" else 1,
             key="settings_provider",
-            horizontal=False,
         )
 
-        if provider == "ollama" and is_streamlit_cloud():
-            st.markdown("""
-            <div class="warning-card">
-                ⚠️ <strong>Ollama requires local installation</strong><br>
-                Ollama is not available on Streamlit Cloud. Please use OpenAI provider for cloud deployments.
-            </div>
-            """, unsafe_allow_html=True)
+        model = st.session_state.llm_model
+        base_url = st.session_state.llm_base_url
+        api_key = st.session_state.openai_api_key
+        is_openai_key_valid = True
 
         if provider == "ollama":
             st.markdown("#### Ollama Configuration")
@@ -1212,9 +1341,8 @@ def render_settings_tab():
                     if st.session_state.llm_model in models
                     else 0,
                     key="settings_model_select",
-                    help="Choose from your installed Ollama models"
                 )
-                st.success(f"✅ Connected to Ollama • {len(models)} model(s) available")
+                st.success(f"Connected to Ollama - {len(models)} model(s) available")
             else:
                 model = st.text_input(
                     "Model name",
@@ -1222,43 +1350,46 @@ def render_settings_tab():
                     key="settings_model_text",
                     placeholder="llama3.1:8b"
                 )
-                st.error("❌ Could not connect to Ollama. Make sure it's running.")
-                st.caption("Start Ollama: `ollama serve` • Install models: `ollama pull llama3.1:8b`")
+                st.error("Could not connect to Ollama. Make sure it's running.")
+                st.caption("Start Ollama: `ollama serve`")
         else:
             st.markdown("#### OpenAI Configuration")
-            st.caption("Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)")
             api_key = st.text_input(
                 "OpenAI API Key",
                 value=st.session_state.openai_api_key if st.session_state.openai_api_key not in ["", "your-api-key-here"] else "",
                 type="password",
                 key="settings_openai_key",
-                help="Your OpenAI API key (starts with sk-)",
                 placeholder="sk-proj-..."
             )
-            model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"]
+            model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"]
             current_model = st.session_state.llm_model if st.session_state.llm_provider == "openai" else "gpt-4o-mini"
             model = st.selectbox(
                 "Model",
                 options=model_options,
                 index=model_options.index(current_model) if current_model in model_options else 0,
                 key="settings_openai_model",
-                help="gpt-4o-mini recommended for best cost/performance",
             )
             base_url = "https://api.openai.com/v1"
 
-            if api_key:
-                if api_key.startswith("sk-") and len(api_key) > 20:
-                    st.success("✅ API key format looks valid")
-                else:
-                    st.warning("⚠️ API key format may be invalid (should start with 'sk-')")
+            is_openai_key_valid = bool(api_key and api_key.startswith("sk-") and len(api_key) > 20)
+            if is_openai_key_valid:
+                st.success("API key format looks valid")
+            elif api_key:
+                st.warning("API key format may be invalid (should start with 'sk-')")
+            else:
+                st.info("Enter your OpenAI API key to enable cloud generation.")
 
-        if st.button("💾 Save Settings", type="primary", use_container_width=True):
+        save_disabled = provider == "openai" and not is_openai_key_valid
+        if save_disabled:
+            st.caption("Enter a valid OpenAI API key to save OpenAI settings.")
+
+        if st.button("Save Settings", type="primary", use_container_width=True, disabled=save_disabled):
             st.session_state.llm_provider = provider
             st.session_state.llm_model = model
             st.session_state.llm_base_url = base_url
             if provider == "openai":
                 st.session_state.openai_api_key = api_key
-            st.toast("✅ Settings saved successfully!", icon="✅")
+            st.toast("Settings saved")
             st.success("AI provider settings saved successfully.")
             st.rerun()
 
@@ -1317,47 +1448,44 @@ def render_settings_tab():
 
 def render_landing_page():
     """Post-login generation workspace focused on three primary tasks."""
-    st.markdown("## Document Workspace")
-    st.caption("Choose one of three tasks to continue.")
+    render_workflow_header(
+        "Document Workspace",
+        "Select a workflow to continue.",
+        step_note="Tip: Start with New Document for drafting, Review Existing for revisions, or Learn to improve retrieval.",
+    )
 
-    col1, col2, col3 = st.columns(3, gap="large")
+    col1, col2, col3 = st.columns(3, gap="medium")
 
     with col1:
         st.markdown("""
-        <div class="card" style="padding: 1.2rem; min-height: 210px;">
-            <h3 style="margin-top: 0;">New Document</h3>
-            <p style="color: var(--text-secondary); line-height: 1.5;">
-                Create a new legal document with your saved configuration preferences.
-            </p>
+        <div class="workspace-tile">
+            <div class="workspace-tile-title">New Document</div>
+            <div class="workspace-tile-copy">Draft a new document with your saved configuration profile.</div>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("New Document", type="primary", use_container_width=True, key="home_new_doc"):
+        if st.button("Start Draft", type="secondary", use_container_width=True, key="home_new_doc"):
             st.session_state.workflow_mode = "create"
             st.rerun()
 
     with col2:
         st.markdown("""
-        <div class="card" style="padding: 1.2rem; min-height: 210px;">
-            <h3 style="margin-top: 0;">Review / Manage Existing</h3>
-            <p style="color: var(--text-secondary); line-height: 1.5;">
-                Edit an uploaded document in-screen with live prompting and export results.
-            </p>
+        <div class="workspace-tile">
+            <div class="workspace-tile-title">Review Existing</div>
+            <div class="workspace-tile-copy">Refine uploaded documents with iterative, in-screen edits.</div>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("Review / Manage", type="primary", use_container_width=True, key="home_review_doc"):
+        if st.button("Open Editor", type="secondary", use_container_width=True, key="home_review_doc"):
             st.session_state.workflow_mode = "edit"
             st.rerun()
 
     with col3:
         st.markdown("""
-        <div class="card" style="padding: 1.2rem; min-height: 210px;">
-            <h3 style="margin-top: 0;">Learn from a Document</h3>
-            <p style="color: var(--text-secondary); line-height: 1.5;">
-                Upload examples to improve retrieval and future draft quality.
-            </p>
+        <div class="workspace-tile">
+            <div class="workspace-tile-title">Learn from Document</div>
+            <div class="workspace-tile-copy">Index approved examples to improve future generation quality.</div>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("Learn from Document", type="primary", use_container_width=True, key="home_learn_doc"):
+        if st.button("Learn From Files", type="secondary", use_container_width=True, key="home_learn_doc"):
             st.session_state.workflow_mode = "learn"
             st.rerun()
 
@@ -1375,16 +1503,15 @@ def render_edit_workflow():
         st.session_state.pop("edit_document_history", None)
         st.session_state.pop("edit_chat_messages", None)
         st.session_state.pop("edit_revision_goal", None)
+        st.session_state.pop("edit_original_file_bytes", None)
+        st.session_state.pop("edit_document_original", None)
         st.rerun()
-
-    st.markdown("## Edit Existing Document")
-    st.caption("Step 1 upload, Step 2 set revision objective, Step 3 apply targeted AI changes.")
 
     if "edit_revision_goal" not in st.session_state:
         st.session_state.edit_revision_goal = "Preserve structure; improve precision and legal clarity."
 
     if "edit_document_text" not in st.session_state:
-        st.progress(0.33)
+        render_workflow_header("Edit Existing Document", "Upload one document and apply targeted revisions.", progress=0.33, step_note="Step 1 of 3: Upload")
         st.markdown("""
         <div class="info-card">
             Upload one document to begin. The assistant maintains full-document continuity for each revision.
@@ -1393,29 +1520,32 @@ def render_edit_workflow():
 
         uploaded_file = st.file_uploader(
             "Upload document",
-            type=["pdf", "docx", "txt"],
+            type=["pdf", "docx", "docm", "txt"],
             key="edit_upload",
             help="Supported: PDF, DOCX, TXT"
         )
 
         if uploaded_file:
+            raw_bytes = uploaded_file.getvalue()
             with st.spinner("Reading document..."):
-                text = extract_text_from_file(uploaded_file)
+                text = extract_text_from_file(io.BytesIO(raw_bytes), uploaded_file.name)
 
             if len(text) < 50:
                 st.error("Document appears too short or unreadable. Upload a valid file.")
             else:
+                ext = ("." + uploaded_file.name.split(".")[-1].lower()) if "." in uploaded_file.name else ".txt"
                 st.session_state.edit_document_text = text
                 st.session_state.edit_document_original = text
                 st.session_state.edit_document_history = [{"version": 0, "text": text, "change": "Original document"}]
                 st.session_state.edit_chat_messages = []
                 st.session_state.edit_filename = uploaded_file.name
-                st.session_state.edit_file_ext = ("." + uploaded_file.name.split(".")[-1].lower()) if "." in uploaded_file.name else ".txt"
-                st.success(f"Loaded {uploaded_file.name}")
+                st.session_state.edit_file_ext = ext
+                st.session_state.edit_original_file_bytes = raw_bytes if ext in [".docx", ".docm"] else None
+                st.success(f"Loaded {uploaded_file.name} ({len(text):,} characters)")
                 st.rerun()
         return
 
-    st.progress(0.66)
+    render_workflow_header("Edit Existing Document", "Refine your working draft and apply AI revisions.", progress=0.66, step_note="Step 2 of 3: Objective and revisions")
     st.markdown(f"""
     <div class="info-card">
         <strong>Document:</strong> {st.session_state.get('edit_filename', 'Untitled')}<br>
@@ -1470,6 +1600,16 @@ def render_edit_workflow():
         if edited_text != st.session_state.edit_document_text:
             st.session_state.edit_document_text = edited_text
 
+        diff_html, add_count, del_count = build_diff_highlight_html(
+            st.session_state.get("edit_document_original", ""),
+            st.session_state.edit_document_text,
+        )
+        with st.expander(f"Exact changes (+{add_count} / -{del_count})", expanded=False):
+            st.markdown(
+                f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{diff_html}</div>",
+                unsafe_allow_html=True,
+            )
+
         a, b, c = st.columns(3)
         with a:
             if len(st.session_state.edit_document_history) > 1 and st.button("Undo", use_container_width=True, key="edit_undo"):
@@ -1488,6 +1628,52 @@ def render_edit_workflow():
                     file_name=f"{base_name}_edited.txt",
                     mime="text/plain",
                     use_container_width=True,
+                )
+            elif ext in [".docx", ".docm"] and st.session_state.get("edit_original_file_bytes"):
+                try:
+                    preserved_bytes = DocumentGenerator.replace_text_preserve_word_template(
+                        st.session_state.edit_original_file_bytes,
+                        st.session_state.edit_document_text,
+                    )
+                    out_ext = ext
+                    out_mime = (
+                        "application/vnd.ms-word.document.macroEnabled.12"
+                        if out_ext == ".docm"
+                        else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    )
+                    st.download_button(
+                        label=f"Download preserved {out_ext}",
+                        data=preserved_bytes,
+                        file_name=f"{base_name}_edited{out_ext}",
+                        mime=out_mime,
+                        use_container_width=True,
+                    )
+                except Exception as preserve_err:
+                    st.warning(f"Could not preserve original package exactly ({preserve_err}). Using standard DOCX export.")
+                    docx_bytes = DocumentGenerator.text_to_docx(
+                        st.session_state.edit_document_text,
+                        original_name,
+                    )
+                    st.download_button(
+                        label="Download .docx",
+                        data=docx_bytes,
+                        file_name=f"{base_name}_edited.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
+
+                redline_bytes = DocumentGenerator.diff_to_docx(
+                    st.session_state.get("edit_document_original", ""),
+                    st.session_state.edit_document_text,
+                    title=f"{base_name} Redline",
+                )
+                st.download_button(
+                    label="Download redline .docx",
+                    data=redline_bytes,
+                    file_name=f"{base_name}_redline.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                    key="edit_redline_download",
                 )
             else:
                 docx_bytes = DocumentGenerator.text_to_docx(
@@ -1508,6 +1694,8 @@ def render_edit_workflow():
                 st.session_state.pop("edit_document_text", None)
                 st.session_state.pop("edit_document_history", None)
                 st.session_state.pop("edit_chat_messages", None)
+                st.session_state.pop("edit_original_file_bytes", None)
+                st.session_state.pop("edit_document_original", None)
                 st.rerun()
 
         if len(st.session_state.edit_document_history) > 1:
@@ -1530,6 +1718,10 @@ def render_edit_workflow():
         for msg in st.session_state.edit_chat_messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
+
+        if st.button("Clear revision chat", use_container_width=True, key="edit_clear_chat"):
+            st.session_state.edit_chat_messages = []
+            st.rerun()
 
         if prompt := st.chat_input("Example: Clarify notice mechanics and align defined terms"):
             st.session_state.edit_chat_messages.append({"role": "user", "content": prompt})
@@ -1585,141 +1777,168 @@ def render_create_workflow():
         st.session_state.workflow_mode = None
         for k in [
             "create_setup_complete", "create_setup_goal", "create_setup_style", "create_setup_guidance",
-            "create_doc_type", "create_doc_type_label", "create_fields", "create_generated_text", "create_chat_messages"
+            "create_doc_type", "create_doc_type_label", "create_fields", "create_generated_text", "create_chat_messages",
+            "create_doc_description", "create_detection_reason", "create_doc_description_input"
         ]:
             st.session_state.pop(k, None)
         st.rerun()
 
-    st.markdown("## Create New Document")
-    st.caption("Hybrid guidance: quick setup, targeted fact capture, then focused drafting.")
+    def _preview_value(value):
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    def _build_live_preview(doc_label: str, payload: dict) -> str:
+        goal = _preview_value(st.session_state.get("create_setup_goal"))
+        style_source = _preview_value(st.session_state.get("create_setup_style"))
+        guidance = _preview_value(st.session_state.get("create_setup_guidance"))
+        non_empty_items = [(k, _preview_value(v)) for k, v in payload.items() if _preview_value(v)]
+
+        lines = [
+            doc_label.upper(),
+            "",
+            f"Draft objective: {goal or 'Not set'}",
+            f"Style source: {style_source or 'Not set'}",
+            f"Guidance mode: {guidance or 'Not set'}",
+            "",
+            "Key terms:"
+        ]
+        if non_empty_items:
+            for key, value in non_empty_items[:8]:
+                pretty = key.replace("_", " ").title()
+                lines.append(f"- {pretty}: {value}")
+        else:
+            lines.append("- Waiting for input fields")
+
+        lines.extend([
+            "",
+            "Preview clause:",
+            "This draft is generated from the provided inputs and is presented for attorney review."
+        ])
+        return "\n".join(lines)
 
     if not st.session_state.get("create_setup_complete", False):
-        st.progress(0.33)
-        st.markdown("""
-        <div class="info-card">
-            <strong>Step 1 of 3:</strong> Set drafting defaults. You can revise these later.
-        </div>
-        """, unsafe_allow_html=True)
-
-        with st.form("create_setup_form"):
-            goal = st.selectbox(
+        render_workflow_header("Create New Document", "Configure drafting profile and generate a first pass.", progress=0.33, step_note="Step 1 of 3: Draft profile")
+        left, right = st.columns([3, 2], gap="large")
+        with left:
+            st.markdown("### Step 1: Draft Profile")
+            st.session_state.create_setup_goal = st.selectbox(
                 "Drafting goal",
                 ["Board-ready first draft", "Client-ready polished draft", "Fast internal draft"],
                 index=0,
+                key="create_setup_goal_select",
                 help="Controls drafting strictness and polish level."
             )
-            style_pref = st.selectbox(
+            st.session_state.create_setup_style = st.selectbox(
                 "Style source",
-                ["Learned templates first (recommended)", "Standard template library", "Custom freeform"],
+                ["Learned templates first", "Standard template library", "Custom freeform"],
                 index=0,
+                key="create_setup_style_select",
                 help="Controls how much the assistant relies on known template patterns."
             )
-            guidance_pref = st.selectbox("Guidance level", ["Inline guidance", "Minimal guidance"], index=0)
+            st.session_state.create_setup_guidance = st.selectbox(
+                "Guidance level",
+                ["Inline guidance", "Minimal guidance"],
+                index=0,
+                key="create_setup_guidance_select"
+            )
 
-            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-            if submitted:
+            if st.button("Continue to Document Type", type="secondary", use_container_width=True, key="create_setup_continue"):
                 st.session_state.create_setup_complete = True
-                st.session_state.create_setup_goal = goal
-                st.session_state.create_setup_style = style_pref
-                st.session_state.create_setup_guidance = guidance_pref
                 st.rerun()
+        with right:
+            st.markdown("### Live Preview")
+            st.code(_build_live_preview("Document Draft", {}), language="markdown")
         return
 
     if "create_doc_type" not in st.session_state:
-        st.progress(0.66)
-        st.markdown("""
-        <div class="info-card">
-            <strong>Step 2 of 3:</strong> Select document type.
-        </div>
-        """, unsafe_allow_html=True)
+        render_workflow_header("Create New Document", "Describe your request so the app can infer the right document type.", progress=0.66, step_note="Step 2 of 3: Document type")
+        left, right = st.columns([3, 2], gap="large")
 
-        search_query = st.text_input(
-            "Search document types",
-            placeholder="employment, lease, nda, board resolution",
-            key="doc_type_search_exec"
-        ).strip().lower()
+        with left:
+            st.markdown("### Step 2: Describe The Document")
+            description = st.text_area(
+                "Describe what you need",
+                value=st.session_state.get("create_doc_description_input", ""),
+                placeholder="Example: Create a mutual NDA between two SaaS companies with a 3-year term, Delaware law, and carve-outs for independently developed information.",
+                height=180,
+                key="create_doc_description_input",
+                help="Use plain language. The system will infer the document type and generate the right fields.",
+            )
 
-        doc_options = list(DOCUMENT_TYPES.keys()) + ["custom_document"]
-        filtered = [
-            d for d in doc_options
-            if not search_query
-            or search_query in d.lower()
-            or (d in DOCUMENT_TYPES and search_query in DOCUMENT_TYPES[d]["label"].lower())
-        ]
-        if not filtered:
-            st.warning("No document types match your search.")
-            return
+            if st.button("Analyze Description", type="secondary", use_container_width=True, key="create_doc_type_confirm"):
+                if len(description.strip()) < 24:
+                    st.warning("Please provide a fuller description so the model can infer the right document type.")
+                else:
+                    selected, reason = infer_document_type_from_description(description)
+                    st.session_state.create_doc_description = description.strip()
+                    st.session_state.create_detection_reason = reason
 
-        selected = st.selectbox(
-            "Document type",
-            options=filtered,
-            format_func=lambda d: "Custom Document" if d == "custom_document" else DOCUMENT_TYPES[d]["label"],
-            key="create_doc_type_pick"
-        )
+                    if selected == "custom_document":
+                        st.session_state.create_doc_type = selected
+                        st.session_state.create_doc_type_label = "Custom Document"
+                        with st.spinner("Analyzing description and building fields..."):
+                            llm = get_llm()
+                            generator = DocumentGenerator(llm, get_collection(), knowledge_db=get_knowledge_db())
+                            fields = generator.get_required_fields_for_type("Custom Document")
+                            st.session_state.create_fields = fields
+                            st.session_state.create_is_learned = any(f.get("learned") for f in fields)
+                    else:
+                        st.session_state.create_doc_type = selected
+                        st.session_state.create_doc_type_label = DOCUMENT_TYPES[selected]["label"]
+                        st.session_state.create_fields = DOCUMENT_TYPES[selected]["fields"]
+                        st.session_state.create_is_learned = False
 
-        if selected == "custom_document":
-            st.caption("Describe requirements and generate a custom legal draft.")
-        else:
-            st.caption(DOCUMENT_TYPES[selected]["description"])
+                    st.success(f"Detected: {st.session_state.create_doc_type_label}")
+                    st.rerun()
 
-        if st.button("Use This Document Type", type="primary", use_container_width=True, key="create_doc_type_confirm"):
-            if selected == "custom_document":
-                st.session_state.create_doc_type = selected
-                st.session_state.create_doc_type_label = "Custom Document"
-                with st.spinner("Loading dynamic template fields..."):
-                    llm = get_llm()
-                    generator = DocumentGenerator(llm, get_collection(), knowledge_db=get_knowledge_db())
-                    fields = generator.get_required_fields_for_type("Custom Document")
-                    st.session_state.create_fields = fields
-                    st.session_state.create_is_learned = any(f.get("learned") for f in fields)
-            else:
-                st.session_state.create_doc_type = selected
-                st.session_state.create_doc_type_label = DOCUMENT_TYPES[selected]["label"]
-                st.session_state.create_fields = DOCUMENT_TYPES[selected]["fields"]
-                st.session_state.create_is_learned = False
-            st.rerun()
+        with right:
+            detected_label = st.session_state.get("create_doc_type_label", "Pending detection")
+            st.markdown("### Live Preview")
+            st.code(_build_live_preview(detected_label if detected_label != "Pending detection" else "Document Draft", {
+                "description": st.session_state.get("create_doc_description_input", "")
+            }), language="markdown")
+            if st.session_state.get("create_detection_reason"):
+                st.caption(f"Detection: {st.session_state.get('create_detection_reason')}")
         return
 
     if "create_generated_text" not in st.session_state:
-        st.progress(1.0)
-        st.markdown("""
-        <div class="info-card">
-            <strong>Step 3 of 3:</strong> Provide key facts. Leave unknown values blank and revise after generation.
-        </div>
-        """, unsafe_allow_html=True)
-
+        render_workflow_header("Create New Document", "Fill key facts and generate your first draft.", progress=1.0, step_note="Step 3 of 3: Generate")
         st.markdown(f"""
-        <div class="card">
-            <strong>Drafting goal:</strong> {st.session_state.get('create_setup_goal')}<br>
-            <strong>Style source:</strong> {st.session_state.get('create_setup_style')}<br>
-            <strong>Guidance:</strong> {st.session_state.get('create_setup_guidance')}
+        <div class="info-card">
+            <strong>Step 3 of 3:</strong> Enter facts and watch the draft preview update live.<br>
+            <strong>Profile:</strong> {st.session_state.get('create_setup_goal')} | {st.session_state.get('create_setup_style')} | {st.session_state.get('create_setup_guidance')}
         </div>
         """, unsafe_allow_html=True)
 
-        with st.form("create_doc_form"):
-            form_data = {}
-            fields = st.session_state.create_fields
-            st.caption(f"Complete the fields that are known now. Total fields: {len(fields)}")
+        left, right = st.columns([3, 2], gap="large")
+        form_data = {}
+        fields = st.session_state.create_fields
 
+        with left:
+            st.caption(f"Fields loaded: {len(fields)}")
             for field in fields:
                 key = field.get("key", "field")
                 label = field.get("label", key.replace("_", " ").title())
                 field_type = field.get("type", "text")
                 placeholder = field.get("placeholder", "")
                 help_text = field.get("help", "")
+                widget_key = f"create_live_{key}"
 
                 if field_type == "date":
-                    form_data[key] = st.date_input(label, value=date.today(), key=f"create_{key}", help=help_text)
+                    form_data[key] = st.date_input(label, value=st.session_state.get(widget_key, date.today()), key=widget_key, help=help_text)
                 elif field_type == "textarea":
-                    form_data[key] = st.text_area(label, placeholder=placeholder, height=100, key=f"create_{key}", help=help_text)
+                    form_data[key] = st.text_area(label, value=st.session_state.get(widget_key, ""), placeholder=placeholder, height=96, key=widget_key, help=help_text)
                 else:
-                    form_data[key] = st.text_input(label, placeholder=placeholder, key=f"create_{key}", help=help_text)
+                    form_data[key] = st.text_input(label, value=st.session_state.get(widget_key, ""), placeholder=placeholder, key=widget_key, help=help_text)
 
-            submitted = st.form_submit_button("Generate Draft", type="primary", use_container_width=True)
-            if submitted:
-                llm = get_llm()
+            llm = get_llm()
+            generate_disabled = not llm.is_available()
+            if generate_disabled:
+                st.caption("Configure an AI provider in Settings to enable draft generation.")
+            if st.button("Generate Draft", type="primary", use_container_width=True, key="create_generate_live", disabled=generate_disabled):
                 if not llm.is_available():
-                    st.error("LLM is not available. Check Settings.")
+                    st.error("LLM is not available. Open Settings and configure a provider.")
                 else:
                     with st.spinner("Generating draft..."):
                         try:
@@ -1731,6 +1950,7 @@ def render_create_workflow():
                                 "draft_goal": st.session_state.get("create_setup_goal", ""),
                                 "style_source": st.session_state.get("create_setup_style", ""),
                                 "guidance_level": st.session_state.get("create_setup_guidance", ""),
+                                "document_description": st.session_state.get("create_doc_description", ""),
                             }
                             form_payload = {**form_data, **generation_context}
 
@@ -1750,6 +1970,10 @@ def render_create_workflow():
                             st.rerun()
                         except Exception as e:
                             st.error(f"Generation failed: {e}")
+
+        with right:
+            st.markdown("### Live Preview")
+            st.code(_build_live_preview(st.session_state.get("create_doc_type_label", "Document Draft"), form_data), language="markdown")
         return
 
     st.markdown(f"""
@@ -1775,7 +1999,7 @@ def render_create_workflow():
         a, b, c = st.columns(3)
         with a:
             if st.button("Start Over", use_container_width=True, key="create_start_over_exec"):
-                for k in ["create_doc_type", "create_fields", "create_generated_text", "create_chat_messages"]:
+                for k in ["create_doc_type", "create_fields", "create_generated_text", "create_chat_messages", "create_doc_description", "create_detection_reason", "create_doc_description_input"]:
                     st.session_state.pop(k, None)
                 st.rerun()
         with b:
@@ -1810,6 +2034,10 @@ def render_create_workflow():
         for msg in st.session_state.get("create_chat_messages", []):
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
+
+        if st.button("Clear revision chat", use_container_width=True, key="create_clear_chat"):
+            st.session_state.create_chat_messages = []
+            st.rerun()
 
         if prompt := st.chat_input("Example: tighten indemnity language and simplify definitions"):
             if "create_chat_messages" not in st.session_state:
@@ -1858,8 +2086,7 @@ def render_learn_workflow():
         st.session_state.workflow_mode = None
         st.rerun()
 
-    st.markdown("## Learn from a Document")
-    st.caption("Upload examples to enrich your knowledge base and improve drafting relevance.")
+    render_workflow_header("Learn from a Document", "Upload reference examples to improve retrieval and drafting relevance.", progress=1.0, step_note="Single step: Upload and index")
 
     uploaded_files = st.file_uploader(
         "Upload one or more documents",
@@ -1876,9 +2103,19 @@ def render_learn_workflow():
         key="learn_doc_type",
     )
 
+    if uploaded_files:
+        st.caption(f"Ready to index: {len(uploaded_files)} file(s) under category '{doc_type}'.")
+    else:
+        st.caption("Upload one or more files to enable indexing.")
+
     if uploaded_files and st.button("Learn from Uploaded Documents", type="primary", use_container_width=True, key="learn_process_btn"):
-        process_uploaded_files(uploaded_files, document_type=doc_type)
+        with st.spinner("Indexing uploaded documents..."):
+            summary = process_uploaded_files(uploaded_files, document_type=doc_type)
         st.success("Learning completed. These documents are now available for retrieval.")
+        st.caption(
+            f"Indexed: {summary['new_files']} | Chunks: {summary['total_chunks']} | "
+            f"Skipped duplicates: {summary['skipped_files']} | Failed: {summary['failed_files']}"
+        )
 
 
 # ======================================================================
@@ -1888,27 +2125,25 @@ def render_learn_workflow():
 def render_settings_page():
     """Render the full settings page."""
 
-    # Back button
-    if st.button("← Back", key="back_from_settings"):
+    if st.button("Back to Workspace", key="back_from_settings"):
         st.session_state.show_settings = False
         st.rerun()
 
-    st.markdown("""
-    <div class="card-header">
-        ⚙️ Settings
-    </div>
-    """, unsafe_allow_html=True)
+    render_workflow_header(
+        "Settings",
+        "Manage AI provider, profile, and admin controls.",
+        step_note="Changes apply to your current session immediately after saving.",
+    )
 
     current_user = st.session_state.current_user
+    st.caption(f"Signed in as: {current_user.full_name} ({current_user.role})")
 
-    # Create tabs for different settings sections
     settings_tab1, settings_tab2, settings_tab3 = st.tabs([
-        "🤖 LLM Provider",
-        "👤 Profile",
-        "👥 Admin" if current_user.is_admin() else "ℹ️ Info"
+        "LLM Provider",
+        "Profile",
+        "Admin" if current_user.is_admin() else "Info",
     ])
 
-    # LLM Provider Settings
     with settings_tab1:
         st.markdown("""
         <div class="info-card">
@@ -1919,10 +2154,15 @@ def render_settings_page():
         provider = st.radio(
             "Select AI Provider",
             options=["ollama", "openai"],
-            format_func=lambda p: "🏠 Ollama (Free, runs locally)" if p == "ollama" else "☁️ OpenAI (Cloud-based, paid API)",
+            format_func=lambda p: "Ollama (Local, free)" if p == "ollama" else "OpenAI (Cloud API)",
             index=0 if st.session_state.llm_provider == "ollama" else 1,
             key="settings_provider",
         )
+
+        model = st.session_state.llm_model
+        base_url = st.session_state.llm_base_url
+        api_key = st.session_state.openai_api_key
+        is_openai_key_valid = True
 
         if provider == "ollama":
             st.markdown("#### Ollama Configuration")
@@ -1930,7 +2170,7 @@ def render_settings_page():
                 "Ollama API URL",
                 value=st.session_state.llm_base_url,
                 key="settings_base_url",
-                help="Default: http://localhost:11434/v1"
+                help="Default: http://localhost:11434/v1",
             )
             tmp_llm = LLMBackend(provider="ollama", base_url=base_url)
             models = tmp_llm.list_models()
@@ -1943,15 +2183,16 @@ def render_settings_page():
                     else 0,
                     key="settings_model_select",
                 )
-                st.success(f"✅ Connected • {len(models)} model(s) available")
+                st.success(f"Connected to Ollama - {len(models)} model(s) available")
             else:
                 model = st.text_input(
                     "Model name",
                     value=st.session_state.llm_model,
                     key="settings_model_text",
-                    placeholder="llama3.1:8b"
+                    placeholder="llama3.1:8b",
                 )
-                st.error("❌ Could not connect to Ollama. Make sure it's running.")
+                st.error("Could not connect to Ollama. Make sure it's running.")
+                st.caption("Start Ollama: `ollama serve`")
         else:
             st.markdown("#### OpenAI Configuration")
             api_key = st.text_input(
@@ -1959,7 +2200,7 @@ def render_settings_page():
                 value=st.session_state.openai_api_key if st.session_state.openai_api_key not in ["", "your-api-key-here"] else "",
                 type="password",
                 key="settings_openai_key",
-                placeholder="sk-proj-..."
+                placeholder="sk-proj-...",
             )
             model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"]
             current_model = st.session_state.llm_model if st.session_state.llm_provider == "openai" else "gpt-4o-mini"
@@ -1971,33 +2212,40 @@ def render_settings_page():
             )
             base_url = "https://api.openai.com/v1"
 
-            if api_key and api_key.startswith("sk-") and len(api_key) > 20:
-                st.success("✅ API key format looks valid")
+            is_openai_key_valid = bool(api_key and api_key.startswith("sk-") and len(api_key) > 20)
+            if is_openai_key_valid:
+                st.success("API key format looks valid")
+            elif api_key:
+                st.warning("API key format may be invalid (should start with 'sk-')")
+            else:
+                st.info("Enter your OpenAI API key to enable cloud generation.")
 
-        if st.button("💾 Save Settings", type="primary", use_container_width=True):
+        save_disabled = provider == "openai" and not is_openai_key_valid
+        if save_disabled:
+            st.caption("Enter a valid OpenAI API key to save OpenAI settings.")
+
+        if st.button("Save Settings", type="primary", use_container_width=True, disabled=save_disabled):
             st.session_state.llm_provider = provider
             st.session_state.llm_model = model
             st.session_state.llm_base_url = base_url
             if provider == "openai":
                 st.session_state.openai_api_key = api_key
-            st.toast("✅ Settings saved!", icon="✅")
+            st.toast("Settings saved")
             st.success("AI provider settings saved successfully.")
             st.rerun()
 
-    # Profile Settings
     with settings_tab2:
         render_profile_settings(auth_manager, current_user)
 
-    # Admin Panel or Info
     with settings_tab3:
         if current_user.is_admin():
             render_admin_panel(auth_manager, current_user)
         else:
             st.markdown("""
             <div class="info-card">
-                <strong>Corporate Law Document Generator</strong><br><br>
-                You are logged in as a regular user.<br>
-                Contact an administrator for account-related requests.
+                <strong>Account Information</strong><br><br>
+                You are signed in as a standard user.<br>
+                Contact an administrator for role changes or workspace-level requests.
             </div>
             """, unsafe_allow_html=True)
 
@@ -2015,15 +2263,15 @@ def render_knowledge_base_page():
         return
 
     # Back button
-    if st.button("← Back", key="back_from_kb"):
+    if st.button("Back to Workspace", key="back_from_kb"):
         st.session_state.show_knowledge_base = False
         st.rerun()
 
-    st.markdown("""
-    <div class="card-header">
-        📚 Knowledge Base & Continuous Learning
-    </div>
-    """, unsafe_allow_html=True)
+    render_workflow_header(
+        "Knowledge Base",
+        "Manage learned templates, indexed files, scanner settings, and scan history.",
+        step_note="Admin only: use this view to keep retrieval quality high.",
+    )
 
     knowledge_db = get_knowledge_db()
     # Lazy-init scanner only on Knowledge Base page (admin/manual use).
@@ -2206,7 +2454,14 @@ def render_knowledge_base_page():
                 st.info("Restart the scanner for the new interval to take effect")
 
         else:
-            st.error("Background scanner not initialized")
+            st.warning("Background scanner is not initialized yet.")
+            if st.button("Initialize Scanner", key="kb_init_scanner", use_container_width=True):
+                try:
+                    _ = get_background_scanner(current_user.user_id, get_llm(), get_collection(), knowledge_db)
+                    st.success("Scanner initialized")
+                    st.rerun()
+                except Exception as init_err:
+                    st.error(f"Failed to initialize scanner: {init_err}")
 
     # Tab 4: Scan History
     with kb_tab4:
@@ -2268,15 +2523,10 @@ def main():
 
     if current_user.must_change_password:
         st.warning("Password update required. You can continue, but update it from Settings -> Profile.")
-        if st.button("Go to Password Settings", key="force_pw_change_cta"):
-            st.session_state.show_settings = True
-            st.rerun()
 
     # Auto-connect all users to the host's Ollama instance (no onboarding needed)
-    # Only show onboarding wizard if explicitly using OpenAI with no key set
     if not st.session_state.get("onboarding_complete", False):
         if st.session_state.llm_provider == "ollama":
-            # Ollama users connect directly to host — skip onboarding
             st.session_state.onboarding_complete = True
         elif st.session_state.llm_provider == "openai" and not st.session_state.openai_api_key:
             render_onboarding_wizard()
@@ -2284,50 +2534,62 @@ def main():
         else:
             st.session_state.onboarding_complete = True
 
-    # Render clean plain header
     st.title("Corporate Law Document Generator")
     st.caption("Document generation workspace")
 
-    # Check LLM availability
+    top_actions = st.columns(4)
+    with top_actions[0]:
+        if st.button("Workspace Home", use_container_width=True, key="top_workspace"):
+            st.session_state.workflow_mode = None
+            st.session_state.show_settings = False
+            st.session_state.show_knowledge_base = False
+            st.rerun()
+    with top_actions[1]:
+        if st.button("Settings", use_container_width=True, key="top_settings"):
+            st.session_state.show_settings = True
+            st.session_state.show_knowledge_base = False
+            st.rerun()
+    with top_actions[2]:
+        if current_user.is_admin():
+            if st.button("Knowledge Base", use_container_width=True, key="top_knowledge"):
+                st.session_state.show_knowledge_base = True
+                st.session_state.show_settings = False
+                st.rerun()
+        else:
+            st.button("Knowledge Base (Admin)", use_container_width=True, key="top_knowledge_disabled", disabled=True)
+    with top_actions[3]:
+        if st.button("Sign Out", use_container_width=True, key="top_logout"):
+            logout(st.session_state)
+            st.rerun()
+
+    current_view = (
+        "Settings" if st.session_state.get("show_settings")
+        else "Knowledge Base" if st.session_state.get("show_knowledge_base")
+        else "Workspace"
+    )
+    st.caption(f"Current view: {current_view}")
+
     llm = get_llm()
     if not llm.is_available():
         if st.session_state.llm_provider == "ollama":
             st.markdown("""
             <div class="error-card">
-                <strong>⚠️ Ollama Not Running</strong><br><br>
-                The app is configured to use Ollama, but it's not running.<br><br>
-                <strong>To fix this:</strong><br>
-                1. Make sure Ollama is installed (<a href="https://ollama.com" target="_blank">ollama.com</a>)<br>
-                2. Open a terminal and run: <code>ollama serve</code><br>
-                3. Pull a model: <code>ollama pull llama3.1:8b</code><br>
-                4. Refresh this page<br><br>
-                <strong>Or:</strong> Click the gear icon in the sidebar to switch to OpenAI
+                <strong>Ollama Not Running</strong><br><br>
+                Start Ollama (<code>ollama serve</code>) and refresh this page, or switch to OpenAI in Settings.
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown("""
             <div class="error-card">
-                <strong>⚠️ OpenAI API Key Required</strong><br><br>
-                The app is configured to use OpenAI, but no valid API key was found.<br><br>
-                <strong>To fix this:</strong><br>
-                1. Go to <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a><br>
-                2. Sign up or log in<br>
-                3. Create a new API key<br>
-                4. Click the gear icon in the sidebar → <strong>LLM Provider</strong><br>
-                5. Enter your API key and click Save<br><br>
-                <strong>Or:</strong> Install and use Ollama locally (free)
+                <strong>OpenAI API Key Required</strong><br><br>
+                Add a valid API key in Settings before generating documents.
             </div>
             """, unsafe_allow_html=True)
 
-    # Render sidebar with Settings access
-    render_sidebar()
-
-    # Check if settings page should be shown
     if st.session_state.get("show_settings"):
         render_settings_page()
         return
 
-    # Check if knowledge base page should be shown
     if st.session_state.get("show_knowledge_base"):
         if current_user.is_admin():
             render_knowledge_base_page()
@@ -2336,7 +2598,6 @@ def main():
             st.session_state.show_knowledge_base = False
         return
 
-    # Main workflow routing
     workflow_mode = st.session_state.get("workflow_mode")
 
     if workflow_mode == "edit":
@@ -2348,9 +2609,10 @@ def main():
     else:
         render_landing_page()
 
-    # Render footer
     render_footer()
 
 
 if __name__ == "__main__":
     main()
+
+

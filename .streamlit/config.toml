@@ -3,17 +3,17 @@ developmentMode = false
 
 [server]
 headless = true
-enableCORS = false
-enableXsrfProtection = false
+enableCORS = true
+enableXsrfProtection = true
 fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false
 
 [theme]
-base = "dark"
-primaryColor = "#d4af37"
-backgroundColor = "#0f1923"
-secondaryBackgroundColor = "#1a2a3a"
-textColor = "#ffffff"
+base = "light"
+primaryColor = "#111111"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f7f8f7"
+textColor = "#111111"
 font = "sans serif"

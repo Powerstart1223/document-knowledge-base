@@ -85,7 +85,7 @@ After secrets are saved, test:
 
 1. **Home Page Loads**
    - App should load without errors
-   - LLM status should show "OpenAI (gpt-4o-mini)" in sidebar
+   - Open Settings -> LLM Provider and confirm OpenAI is selected with model `gpt-4o-mini`
 
 2. **Document Upload**
    - Upload a test PDF or DOCX
@@ -97,17 +97,29 @@ After secrets are saved, test:
    - Should receive AI-generated answer with source citation
 
 4. **Document Generation**
-   - Go to "Generate Document" tab
-   - Select a document type (e.g., "Legal Memorandum")
+   - From Workspace Home, click "Start Draft"
+   - Complete the 3-step Create New Document flow
    - Fill in required fields
    - Click "Generate Document"
    - Should generate a draft document
-   - Click "Download as .docx" to verify export
+   - Click "Download .docx" to verify export
 
 5. **Settings**
    - Verify "Running on Streamlit Cloud" message appears
    - LLM provider should be "OpenAI"
    - API key validation should show "API key format looks valid"
+
+## Runtime Security Defaults
+
+For public Streamlit deployment, keep these defaults in `.streamlit/config.toml`:
+
+```toml
+[server]
+enableCORS = true
+enableXsrfProtection = true
+```
+
+Do not disable these for public apps.
 
 ## Troubleshooting
 
