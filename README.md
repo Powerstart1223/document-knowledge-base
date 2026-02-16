@@ -52,13 +52,13 @@ A RAG-powered legal document generation system with AI-assisted drafting, built 
 
 4. **Open your browser and login:**
    - Navigate to `http://localhost:8501`
-   - Default admin credentials:
-     - Email: `admin@lawfirm.com`
-     - Password: `Admin123!`
-   - **âš ï¸ Change the password immediately after first login!**
+   - On first run, a bootstrap admin is created at `admin@cypressllp.com`
+   - Password comes from `BOOTSTRAP_ADMIN_PASSWORD` or is generated and written to `bootstrap_admin_credentials.txt`
+   - Change the password immediately after first login
 
 5. **Create additional users:**
    - Click "Create Account" on login screen
+   - Registration is restricted to `@cypressllp.com`
    - Or use Admin panel to manage users
 
 ## Quick Start â€” Streamlit Cloud Deployment

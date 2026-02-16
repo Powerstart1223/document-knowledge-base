@@ -68,8 +68,9 @@ LEGAL_DB_API_KEY = ""
 **⚠️ IMPORTANT: Default Admin Credentials**
 
 On first run, the application automatically creates a default administrator account:
-- **Email:** `admin@lawfirm.com`
-- **Password:** `Admin123!`
+If no bootstrap password is configured, the app writes temporary credentials to `bootstrap_admin_credentials.txt` on first startup.
+- **Email:** `admin@cypressllp.com`
+- **Password:** from `BOOTSTRAP_ADMIN_PASSWORD` or generated at runtime
 
 **🔐 Security Note:** Change this password immediately after first login!
 
