@@ -1851,6 +1851,9 @@ def render_edit_workflow():
         st.session_state.pop("edit_redline_edit_area", None)
         st.session_state.pop("edit_redline_source_text", None)
         st.session_state.pop("edit_preview_redline_area", None)
+        st.session_state.pop("edit_ai_proposal_text", None)
+        st.session_state.pop("edit_ai_proposal_base", None)
+        st.session_state.pop("edit_ai_proposal_note", None)
         st.rerun()
 
     if "edit_revision_goal" not in st.session_state:
@@ -1865,6 +1868,12 @@ def render_edit_workflow():
         st.session_state.edit_edgar_active_doc_index = 0
     if "edit_redline_source_text" not in st.session_state:
         st.session_state.edit_redline_source_text = ""
+    if "edit_ai_proposal_text" not in st.session_state:
+        st.session_state.edit_ai_proposal_text = None
+    if "edit_ai_proposal_base" not in st.session_state:
+        st.session_state.edit_ai_proposal_base = ""
+    if "edit_ai_proposal_note" not in st.session_state:
+        st.session_state.edit_ai_proposal_note = ""
 
     if "edit_document_text" not in st.session_state:
         render_workflow_header("Edit Existing Document", "Upload one document and apply targeted revisions.", progress=0.33, step_note="Step 1 of 3: Upload")
@@ -1906,6 +1915,9 @@ def render_edit_workflow():
                 st.session_state.edit_redline_edit_area = build_diff_edit_markup(text, text)[0]
                 st.session_state.edit_redline_source_text = text
                 st.session_state.edit_preview_redline_area = st.session_state.edit_redline_edit_area
+                st.session_state.edit_ai_proposal_text = None
+                st.session_state.edit_ai_proposal_base = ""
+                st.session_state.edit_ai_proposal_note = ""
                 st.success(f"Loaded {uploaded_file.name} ({len(text):,} characters)")
                 st.rerun()
         return
@@ -1996,48 +2008,70 @@ def render_edit_workflow():
                 key=f"edit_edgar_doc_text_{active_idx}",
             )
 
+        proposal_text = st.session_state.get("edit_ai_proposal_text")
+        proposal_base = st.session_state.get("edit_ai_proposal_base", "")
+        if proposal_text:
+            st.markdown("#### AI Proposed Changes (Pending Commit)")
+            proposal_html, proposal_add, proposal_del = build_diff_highlight_html(
+                proposal_base,
+                proposal_text,
+            )
+            st.markdown(
+                f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{proposal_html}</div>",
+                unsafe_allow_html=True,
+            )
+            st.caption(f"Proposed delta (+{proposal_add} / -{proposal_del})")
+            pc1, pc2 = st.columns(2)
+            with pc1:
+                if st.button("Commit Proposed Changes", key="edit_commit_ai_proposal", use_container_width=True):
+                    version_num = len(st.session_state.edit_document_history)
+                    st.session_state.edit_document_text = proposal_text
+                    st.session_state.edit_document_history.append({
+                        "version": version_num,
+                        "text": proposal_text,
+                        "change": st.session_state.get("edit_ai_proposal_note", "AI proposed revision")[:72],
+                        "kind": "ai",
+                    })
+                    st.session_state.edit_ai_proposal_text = None
+                    st.session_state.edit_ai_proposal_base = ""
+                    st.session_state.edit_ai_proposal_note = ""
+                    st.rerun()
+            with pc2:
+                if st.button("Discard Proposed Changes", key="edit_discard_ai_proposal", use_container_width=True):
+                    st.session_state.edit_ai_proposal_text = None
+                    st.session_state.edit_ai_proposal_base = ""
+                    st.session_state.edit_ai_proposal_note = ""
+                    st.rerun()
+
         diff_html, add_count, del_count = build_diff_highlight_html(
             st.session_state.get("edit_document_original", ""),
             st.session_state.edit_document_text,
         )
 
         history = st.session_state.edit_document_history
-        latest_ai_text = history[-1]["text"] if history else st.session_state.edit_document_text
-
-        if len(history) > 1:
-            prev_ai_text = history[-2]["text"]
+        ai_entries = [
+            v for v in history
+            if v.get("kind") == "ai" or (
+                v.get("version", 0) > 0
+                and "imported" not in str(v.get("change", "")).lower()
+                and "baseline" not in str(v.get("change", "")).lower()
+                and "original" not in str(v.get("change", "")).lower()
+            )
+        ]
+        if ai_entries:
+            latest_ai_text = ai_entries[-1]["text"]
+            latest_ai_base = ai_entries[-2]["text"] if len(ai_entries) > 1 else st.session_state.get("edit_document_original", "")
             latest_diff_html, latest_add_count, latest_del_count = build_diff_highlight_html(
-                prev_ai_text,
+                latest_ai_base,
                 latest_ai_text,
             )
-            st.markdown(f"#### Latest AI Revision Delta (+{latest_add_count} / -{latest_del_count})")
+            st.markdown(f"#### Latest AI Revision Commit Delta (+{latest_add_count} / -{latest_del_count})")
             st.markdown(
                 f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{latest_diff_html}</div>",
                 unsafe_allow_html=True,
             )
 
-        ai_total_html, ai_total_add, ai_total_del = build_diff_highlight_html(
-            st.session_state.get("edit_document_original", ""),
-            latest_ai_text,
-        )
-        st.markdown(f"#### Total AI Revisions vs Original (+{ai_total_add} / -{ai_total_del})")
-        st.markdown(
-            f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{ai_total_html}</div>",
-            unsafe_allow_html=True,
-        )
-
-        if latest_ai_text != st.session_state.edit_document_text:
-            draft_delta_html, draft_add, draft_del = build_diff_highlight_html(
-                latest_ai_text,
-                st.session_state.edit_document_text,
-            )
-            st.markdown(f"#### Current Draft Delta (Not Yet AI-Committed) (+{draft_add} / -{draft_del})")
-            st.markdown(
-                f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{draft_delta_html}</div>",
-                unsafe_allow_html=True,
-            )
-
-        st.markdown(f"#### Total Redline vs Original (+{add_count} / -{del_count})")
+        st.markdown(f"#### Total Revisions vs Original (+{add_count} / -{del_count})")
         st.markdown(
             f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{diff_html}</div>",
             unsafe_allow_html=True,
@@ -2138,6 +2172,9 @@ def render_edit_workflow():
                 st.session_state.pop("edit_redline_edit_area", None)
                 st.session_state.pop("edit_redline_source_text", None)
                 st.session_state.pop("edit_preview_redline_area", None)
+                st.session_state.pop("edit_ai_proposal_text", None)
+                st.session_state.pop("edit_ai_proposal_base", None)
+                st.session_state.pop("edit_ai_proposal_note", None)
                 st.rerun()
 
         if len(st.session_state.edit_document_history) > 1:
@@ -2265,17 +2302,19 @@ def render_edit_workflow():
                         }
                     ]
                     try:
+                        proposal_input_text = st.session_state.get("edit_ai_proposal_text") or st.session_state.edit_document_text
+                        proposal_base_text = st.session_state.get("edit_ai_proposal_base") or st.session_state.edit_document_text
+                        messages[1]["content"] = (
+                            f"Revision objective: {st.session_state.edit_revision_goal}\n\n"
+                            f"Current document:\n\n{proposal_input_text}\n\n"
+                            f"Change request: {pending_prompt}\n\n"
+                            "Return only the full updated document text."
+                        )
                         response = llm.chat(messages, temperature=0.2, max_tokens=4096)
-                        version_num = len(st.session_state.edit_document_history)
-                        st.session_state.edit_document_text = response
-                        st.session_state.edit_redline_source_text = response
-                        st.session_state.edit_draft_view_mode = "Clean Draft"
-                        st.session_state.edit_document_history.append({
-                            "version": version_num,
-                            "text": response,
-                            "change": pending_prompt[:72] + ("..." if len(pending_prompt) > 72 else "")
-                        })
-                        st.session_state.edit_chat_messages.append({"role": "assistant", "content": "Revision applied."})
+                        st.session_state.edit_ai_proposal_text = response
+                        st.session_state.edit_ai_proposal_base = proposal_base_text
+                        st.session_state.edit_ai_proposal_note = pending_prompt
+                        st.session_state.edit_chat_messages.append({"role": "assistant", "content": "Proposed revision ready. Review in 'AI Proposed Changes' and commit or request clarification."})
                         st.rerun()
                     except Exception as e:
                         err = f"Error: {e}"
@@ -2628,6 +2667,9 @@ def render_create_workflow():
                 st.session_state.edit_edgar_compare_meta = None
                 st.session_state.edit_edgar_documents = []
                 st.session_state.edit_edgar_active_doc_index = 0
+                st.session_state.edit_ai_proposal_text = None
+                st.session_state.edit_ai_proposal_base = ""
+                st.session_state.edit_ai_proposal_note = ""
                 st.session_state.workflow_mode = "edit"
                 st.rerun()
 
