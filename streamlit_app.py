@@ -625,6 +625,54 @@ def run_edgar_clause_compare(
     }
 
 
+
+def search_edgar_comparable_documents(
+    sec_client: SECEdgarClient,
+    query: str,
+    form_types: list[str],
+    max_results: int = 5,
+) -> dict:
+    """Search comparable EDGAR filings and return a previewable list."""
+    if not (query or "").strip():
+        return {"error": "Enter an EDGAR query to find comparable documents.", "documents": []}
+
+    hits = sec_client.search_filings(
+        query=query.strip(),
+        form_types=form_types or None,
+        max_results=max_results,
+    )
+    if not hits:
+        return {"error": "No comparable EDGAR documents found for that query.", "documents": []}
+
+    documents = []
+    for hit in hits:
+        filing_url = hit.get("url", "")
+        if not filing_url:
+            continue
+        try:
+            filing_text = sec_client.download_filing_text(filing_url, max_chars=60_000)
+        except Exception:
+            continue
+        if len(filing_text) < 200:
+            continue
+        documents.append({
+            "entity_name": hit.get("entity_name", ""),
+            "form_type": hit.get("form_type", ""),
+            "file_date": hit.get("file_date", ""),
+            "url": filing_url,
+            "text": _clip_text(filing_text, 14000),
+        })
+
+    if not documents:
+        return {"error": "Filings matched, but no usable document text could be retrieved.", "documents": []}
+
+    return {
+        "documents": documents,
+        "hits_considered": len(hits),
+        "hits_loaded": len(documents),
+    }
+
+
 def infer_document_type_from_description(description: str) -> tuple[str, str]:
     """Infer best document type key from a natural language description."""
     desc = (description or "").strip()
@@ -2196,76 +2244,51 @@ def render_edit_workflow():
                 "EDGAR search query",
                 value=st.session_state.get("edit_edgar_query", default_query),
                 key="edit_edgar_query",
-                help="Example: software services agreement or a public company name",
+                help="Search for comparable filings (example: software services agreement or public company name).",
             )
             edgar_forms_raw = st.text_input(
                 "Form types (comma-separated, optional)",
                 value=st.session_state.get("edit_edgar_forms", "8-K,10-K,10-Q"),
                 key="edit_edgar_forms",
             )
-            max_results = st.slider("Filings to scan", min_value=1, max_value=8, value=4, key="edit_edgar_max_results")
-            threshold = st.slider("Similarity threshold", min_value=0.20, max_value=0.90, value=0.34, step=0.01, key="edit_edgar_threshold")
+            max_results = st.slider("Comparable filings to load", min_value=1, max_value=10, value=5, key="edit_edgar_max_results")
 
             if not sec_client.is_configured():
                 st.info("SEC EDGAR User-Agent is not configured. Add it in Settings to enable comparisons.")
 
-            if st.button("Run EDGAR comparison", use_container_width=True, key="edit_run_edgar_compare"):
+            if st.button("Search Comparable EDGAR Documents", use_container_width=True, key="edit_run_edgar_compare"):
                 if not sec_client.is_configured():
                     st.error("Set SEC EDGAR User-Agent in Settings first.")
                 else:
                     form_types = [f.strip().upper() for f in edgar_forms_raw.split(",") if f.strip()]
-                    llm = get_llm()
-                    with st.spinner("Comparing clauses against EDGAR filings..."):
-                        result = run_edgar_clause_compare(
-                            document_text=st.session_state.edit_document_text,
+                    with st.spinner("Searching and loading comparable EDGAR filings..."):
+                        result = search_edgar_comparable_documents(
                             sec_client=sec_client,
-                            llm=llm,
                             query=edgar_query,
                             form_types=form_types,
                             max_results=max_results,
-                            similarity_floor=threshold,
-                            max_suggestions=5,
                         )
                     if result.get("error"):
                         st.error(result["error"])
-                        st.session_state.edit_edgar_suggestions = []
+                        st.session_state.edit_edgar_documents = []
+                        st.session_state.edit_edgar_active_doc_index = 0
                         st.session_state.edit_edgar_compare_meta = None
+                    else:
                         st.session_state.edit_edgar_documents = result.get("documents", [])
                         st.session_state.edit_edgar_active_doc_index = 0
-                    else:
-                        st.session_state.edit_edgar_suggestions = result.get("suggestions", [])
                         st.session_state.edit_edgar_compare_meta = {
                             "hits_considered": result.get("hits_considered", 0),
-                            "hits_used": result.get("hits_used", 0),
-                            "peer_units": result.get("peer_units", 0),
+                            "hits_loaded": result.get("hits_loaded", 0),
                         }
-                        st.session_state.edit_edgar_documents = result.get("documents", [])
-                        st.session_state.edit_edgar_active_doc_index = 0
-                        st.success(f"Generated {len(st.session_state.edit_edgar_suggestions)} cited suggestion(s).")
+                        st.success(f"Loaded {len(st.session_state.edit_edgar_documents)} comparable EDGAR document(s).")
 
             compare_meta = st.session_state.get("edit_edgar_compare_meta")
-            suggestions = st.session_state.get("edit_edgar_suggestions", [])
             if compare_meta:
                 st.caption(
-                    f"Scanned {compare_meta['hits_used']}/{compare_meta['hits_considered']} filings | "
-                    f"Comparable peer clauses: {compare_meta['peer_units']}"
+                    f"Comparable filings loaded: {compare_meta.get('hits_loaded', 0)} / "
+                    f"{compare_meta.get('hits_considered', 0)} matched"
                 )
-
-            for i, suggestion in enumerate(suggestions):
-                src = suggestion.get("source", {})
-                with st.container(border=True):
-                    st.markdown(f"**{suggestion.get('current_title', 'Clause')}** | Similarity `{suggestion.get('similarity', 0):.3f}`")
-                    st.caption(f"Peer source: {src.get('entity_name', 'Unknown')} | {src.get('form_type', 'N/A')} | {src.get('file_date', 'N/A')}")
-                    if src.get("url"):
-                        st.markdown(f"[Open filing source]({src['url']})")
-                    st.markdown(f"**Suggested change:** {suggestion.get('suggestion_text', '')}")
-                    st.markdown("**Current excerpt**")
-                    st.code(suggestion.get("current_excerpt", ""), language="markdown")
-                    st.markdown("**Peer excerpt**")
-                    st.code(suggestion.get("peer_excerpt", ""), language="markdown")
-                    if st.button("Apply in revision chat", key=f"edit_apply_edgar_{i}", use_container_width=True):
-                        st.session_state.edit_chat_messages.append({"role": "user", "content": suggestion.get("revision_prompt", "")})
-                        st.rerun()
+                st.caption("Use the 'EDGAR Reference Document' list in Working Draft to open and review each filing.")
 
         for msg in st.session_state.edit_chat_messages:
             with st.chat_message(msg["role"]):
