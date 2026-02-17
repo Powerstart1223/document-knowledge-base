@@ -16,6 +16,7 @@ import re
 import html as html_lib
 import difflib
 import hashlib
+import tempfile
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -246,26 +247,113 @@ def get_sec_client() -> SECEdgarClient:
 # File processing
 # ======================================================================
 
+def _extract_legacy_doc_text(raw_bytes: bytes) -> str:
+    """Best-effort .doc extraction using local Microsoft Word automation on Windows."""
+    if not raw_bytes:
+        return ""
+
+    try:
+        import win32com.client  # type: ignore
+    except Exception:
+        return ""
+
+    temp_doc = None
+    temp_txt = None
+    word = None
+    document = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".doc") as tf:
+            tf.write(raw_bytes)
+            temp_doc = tf.name
+        temp_txt = f"{temp_doc}.txt"
+
+        word = win32com.client.Dispatch("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        document = word.Documents.Open(temp_doc, ReadOnly=True)
+        wd_format_text = 2
+        document.SaveAs(temp_txt, FileFormat=wd_format_text)
+
+        with open(temp_txt, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+    finally:
+        try:
+            if document is not None:
+                document.Close(False)
+        except Exception:
+            pass
+        try:
+            if word is not None:
+                word.Quit()
+        except Exception:
+            pass
+        for p in [temp_txt, temp_doc]:
+            if p:
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+
+
 def extract_text_from_file(uploaded_file, filename: str | None = None) -> str:
-    """Extract text from an uploaded .txt, .pdf, .docx, or .docm file."""
+    """Extract text from an uploaded .txt, .pdf, .doc, .docx, or .docm file."""
     try:
         name = (filename or getattr(uploaded_file, "name", "")).lower()
         if hasattr(uploaded_file, "seek"):
             uploaded_file.seek(0)
 
+        raw = uploaded_file.read() if hasattr(uploaded_file, "read") else uploaded_file
+        if not isinstance(raw, (bytes, bytearray)):
+            raw = str(raw).encode("utf-8", errors="ignore")
+
         if name.endswith(".txt"):
-            raw = uploaded_file.read()
-            return raw.decode("utf-8", errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
-        elif name.endswith(".pdf"):
+            return raw.decode("utf-8", errors="ignore")
+
+        if name.endswith(".pdf"):
             import PyPDF2
-            reader = PyPDF2.PdfReader(uploaded_file)
+            reader = PyPDF2.PdfReader(io.BytesIO(raw))
             return "\n".join(page.extract_text() or "" for page in reader.pages)
-        elif name.endswith(".docx") or name.endswith(".docm"):
+
+        if name.endswith(".docx") or name.endswith(".docm"):
             import docx
-            doc = docx.Document(uploaded_file)
-            return "\n".join(p.text for p in doc.paragraphs)
-        else:
-            return "Unsupported file type."
+            doc = docx.Document(io.BytesIO(raw))
+            parts = []
+
+            for p in doc.paragraphs:
+                t = (p.text or "").strip()
+                if t:
+                    parts.append(t)
+
+            for table in doc.tables:
+                for row in table.rows:
+                    cells = [((c.text or "").strip()) for c in row.cells]
+                    if any(cells):
+                        parts.append(" | ".join(cells))
+
+            for section in doc.sections:
+                for p in section.header.paragraphs:
+                    t = (p.text or "").strip()
+                    if t:
+                        parts.append(t)
+                for p in section.footer.paragraphs:
+                    t = (p.text or "").strip()
+                    if t:
+                        parts.append(t)
+
+            return "\n".join(parts)
+
+        if name.endswith(".doc"):
+            legacy_text = _extract_legacy_doc_text(bytes(raw))
+            if legacy_text:
+                return legacy_text
+            return (
+                "Error reading file: legacy .doc extraction requires Microsoft Word with pywin32 on this host. "
+                "Please upload .docx for highest fidelity."
+            )
+
+        return "Unsupported file type."
     except Exception as e:
         return f"Error reading file: {e}"
 
@@ -1699,9 +1787,9 @@ def render_edit_workflow():
 
         uploaded_file = st.file_uploader(
             "Upload document",
-            type=["pdf", "docx", "docm", "txt"],
+            type=["pdf", "doc", "docx", "docm", "txt"],
             key="edit_upload",
-            help="Supported: PDF, DOCX, TXT"
+            help="Supported: PDF, DOC, DOCX, DOCM, TXT"
         )
 
         if uploaded_file:
@@ -1709,7 +1797,9 @@ def render_edit_workflow():
             with st.spinner("Reading document..."):
                 text = extract_text_from_file(io.BytesIO(raw_bytes), uploaded_file.name)
 
-            if len(text) < 50:
+            if text.startswith("Error reading file:"):
+                st.error(text)
+            elif len(text) < 50:
                 st.error("Document appears too short or unreadable. Upload a valid file.")
             else:
                 ext = ("." + uploaded_file.name.split(".")[-1].lower()) if "." in uploaded_file.name else ".txt"
@@ -1856,6 +1946,8 @@ def render_edit_workflow():
                 )
                 if ext == ".pdf":
                     st.caption("Original was PDF. Export is provided as editable DOCX.")
+                elif ext == ".doc":
+                    st.caption("Original was legacy .doc. Clean and redline exports are provided as .docx.")
 
             redline_bytes = DocumentGenerator.diff_to_docx(
                 st.session_state.get("edit_document_original", ""),
@@ -2299,6 +2391,32 @@ def render_create_workflow():
                 key="create_redline_download",
             )
         with c:
+            if st.button("Open in Editor", use_container_width=True, key="create_open_in_editor"):
+                doc_label = st.session_state.get("create_doc_type_label", "Generated_Document")
+                baseline_text = st.session_state.get("create_original_generated_text", st.session_state.create_generated_text)
+                current_text = st.session_state.create_generated_text
+                generated_name = f"{doc_label.replace(' ', '_')}.docx"
+
+                st.session_state.edit_document_original = baseline_text
+                st.session_state.edit_document_text = current_text
+                if current_text != baseline_text:
+                    st.session_state.edit_document_history = [
+                        {"version": 0, "text": baseline_text, "change": "Generated draft baseline"},
+                        {"version": 1, "text": current_text, "change": "Imported from New Document"},
+                    ]
+                else:
+                    st.session_state.edit_document_history = [
+                        {"version": 0, "text": baseline_text, "change": "Generated draft baseline"},
+                    ]
+                st.session_state.edit_chat_messages = []
+                st.session_state.edit_filename = generated_name
+                st.session_state.edit_file_ext = ".docx"
+                st.session_state.edit_original_file_bytes = DocumentGenerator.text_to_docx(baseline_text, generated_name)
+                st.session_state.edit_edgar_suggestions = []
+                st.session_state.edit_edgar_compare_meta = None
+                st.session_state.workflow_mode = "edit"
+                st.rerun()
+
             if st.button("Re-run Guidance", use_container_width=True, key="create_rerun_setup"):
                 st.session_state.create_setup_complete = False
                 st.rerun()

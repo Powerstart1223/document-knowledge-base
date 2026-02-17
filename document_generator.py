@@ -14,6 +14,9 @@ The pipeline:
 
 import io
 import re
+import difflib
+import zipfile
+import xml.etree.ElementTree as ET
 from datetime import date
 
 from docx import Document as DocxDocument
@@ -804,3 +807,171 @@ Return ONLY the JSON array, no other text."""
         buf = io.BytesIO()
         doc.save(buf)
         return buf.getvalue()
+
+    @staticmethod
+    def replace_text_preserve_word_template(original_file_bytes: bytes, new_text: str) -> bytes:
+        """
+        Replace text inside an existing Word package while preserving package assets.
+
+        This keeps original styles, headers/footers, and docm macros in the package.
+        Text replacement is best-effort and maps new text across existing text runs.
+        """
+        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        source = io.BytesIO(original_file_bytes)
+        out_buf = io.BytesIO()
+
+        with zipfile.ZipFile(source, "r") as zin:
+            if "word/document.xml" not in zin.namelist():
+                raise ValueError("Invalid Word package: missing word/document.xml")
+
+            xml_bytes = zin.read("word/document.xml")
+            root = ET.fromstring(xml_bytes)
+            text_nodes = root.findall(".//w:t", ns)
+            if not text_nodes:
+                raise ValueError("No editable text nodes found in document.xml")
+
+            flat_text = new_text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ")
+            original_lengths = [len(node.text or "") for node in text_nodes]
+            cursor = 0
+
+            for node, chunk_len in zip(text_nodes, original_lengths):
+                if chunk_len <= 0:
+                    node.text = ""
+                    continue
+                node.text = flat_text[cursor:cursor + chunk_len]
+                cursor += chunk_len
+
+            if cursor < len(flat_text):
+                text_nodes[-1].text = (text_nodes[-1].text or "") + flat_text[cursor:]
+
+            ET.register_namespace("w", ns["w"])
+            updated_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+            with zipfile.ZipFile(out_buf, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    if item.filename == "word/document.xml":
+                        zout.writestr(item, updated_xml)
+                    else:
+                        zout.writestr(item, zin.read(item.filename))
+
+        return out_buf.getvalue()
+
+    @staticmethod
+    def diff_to_docx(original_text: str, revised_text: str, title: str = "Document Redline") -> bytes:
+        """Create a native Word tracked-changes .docx with insertions/deletions."""
+
+        def _tokens(content: str) -> list[str]:
+            return re.findall(r"\s+|[A-Za-z0-9_]+|[^\w\s]", content or "")
+
+        ns_w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        ns_xml = "http://www.w3.org/XML/1998/namespace"
+        qn = lambda tag: f"{{{ns_w}}}{tag}"
+        now_iso = date.today().isoformat() + "T00:00:00Z"
+
+        def _set_space_preserve(el: ET.Element, value: str):
+            if value and (value != value.strip() or "  " in value):
+                el.set(f"{{{ns_xml}}}space", "preserve")
+
+        def _append_text_container(parent: ET.Element, content: str, *, deleted: bool):
+            if content == "":
+                return
+            r = ET.SubElement(parent, qn("r"))
+            t = ET.SubElement(r, qn("delText" if deleted else "t"))
+            _set_space_preserve(t, content)
+            t.text = content
+
+        def _append_break(parent: ET.Element):
+            r = ET.SubElement(parent, qn("r"))
+            ET.SubElement(r, qn("br"))
+
+        def _append_segment(parent_p: ET.Element, segment: str, mode: str, rev_id: int):
+            parts = segment.split("\n")
+
+            if mode == "equal":
+                for idx, part in enumerate(parts):
+                    _append_text_container(parent_p, part, deleted=False)
+                    if idx < len(parts) - 1:
+                        _append_break(parent_p)
+                return rev_id
+
+            rev_tag = "ins" if mode == "insert" else "del"
+            rev_el = ET.SubElement(
+                parent_p,
+                qn(rev_tag),
+                {
+                    qn("id"): str(rev_id),
+                    qn("author"): "Document KB AI",
+                    qn("date"): now_iso,
+                },
+            )
+            for idx, part in enumerate(parts):
+                _append_text_container(rev_el, part, deleted=(mode == "delete"))
+                if idx < len(parts) - 1:
+                    _append_break(rev_el)
+            return rev_id + 1
+
+        base_doc = DocxDocument()
+        heading = base_doc.add_heading(title, level=0)
+        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        base_doc.add_paragraph("Open in Microsoft Word and use Review > Accept/Reject to finalize changes.")
+        body_para = base_doc.add_paragraph("")
+
+        base_buf = io.BytesIO()
+        base_doc.save(base_buf)
+
+        source = io.BytesIO(base_buf.getvalue())
+        out_buf = io.BytesIO()
+
+        with zipfile.ZipFile(source, "r") as zin:
+            if "word/document.xml" not in zin.namelist():
+                raise ValueError("Invalid Word package: missing word/document.xml")
+
+            doc_root = ET.fromstring(zin.read("word/document.xml"))
+            paragraphs = doc_root.findall(f".//{qn('p')}")
+            if not paragraphs:
+                raise ValueError("Word document has no paragraph container")
+
+            target_p = paragraphs[-1]
+            for child in list(target_p):
+                target_p.remove(child)
+
+            sm = difflib.SequenceMatcher(a=_tokens(original_text), b=_tokens(revised_text))
+            rev_id = 1
+            for op, i1, i2, j1, j2 in sm.get_opcodes():
+                if op == "equal":
+                    seg = "".join(sm.b[j1:j2])
+                    rev_id = _append_segment(target_p, seg, "equal", rev_id)
+                elif op == "insert":
+                    seg = "".join(sm.b[j1:j2])
+                    rev_id = _append_segment(target_p, seg, "insert", rev_id)
+                elif op == "delete":
+                    seg = "".join(sm.a[i1:i2])
+                    rev_id = _append_segment(target_p, seg, "delete", rev_id)
+                elif op == "replace":
+                    del_seg = "".join(sm.a[i1:i2])
+                    ins_seg = "".join(sm.b[j1:j2])
+                    rev_id = _append_segment(target_p, del_seg, "delete", rev_id)
+                    rev_id = _append_segment(target_p, ins_seg, "insert", rev_id)
+
+            ET.register_namespace("w", ns_w)
+            updated_document_xml = ET.tostring(doc_root, encoding="utf-8", xml_declaration=True)
+
+            updated_settings_xml = None
+            if "word/settings.xml" in zin.namelist():
+                settings_root = ET.fromstring(zin.read("word/settings.xml"))
+                has_track = settings_root.find(f".//{qn('trackRevisions')}") is not None
+                if not has_track:
+                    ET.SubElement(settings_root, qn("trackRevisions"))
+                ET.register_namespace("w", ns_w)
+                updated_settings_xml = ET.tostring(settings_root, encoding="utf-8", xml_declaration=True)
+
+            with zipfile.ZipFile(out_buf, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    if item.filename == "word/document.xml":
+                        zout.writestr(item, updated_document_xml)
+                    elif item.filename == "word/settings.xml" and updated_settings_xml is not None:
+                        zout.writestr(item, updated_settings_xml)
+                    else:
+                        zout.writestr(item, zin.read(item.filename))
+
+        return out_buf.getvalue()
