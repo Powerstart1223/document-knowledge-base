@@ -630,11 +630,11 @@ def search_edgar_comparable_documents(
     sec_client: SECEdgarClient,
     query: str,
     form_types: list[str],
-    max_results: int = 5,
+    max_results: int = 10,
 ) -> dict:
-    """Search comparable EDGAR filings and return a previewable list."""
+    """Search comparable EDGAR filings and return top result metadata list."""
     if not (query or "").strip():
-        return {"error": "Enter an EDGAR query to find comparable documents.", "documents": []}
+        return {"error": "Enter an EDGAR query to find comparable documents.", "results": []}
 
     hits = sec_client.search_filings(
         query=query.strip(),
@@ -642,34 +642,47 @@ def search_edgar_comparable_documents(
         max_results=max_results,
     )
     if not hits:
-        return {"error": "No comparable EDGAR documents found for that query.", "documents": []}
+        return {"error": "No comparable EDGAR documents found for that query.", "results": []}
 
-    documents = []
+    results = []
     for hit in hits:
         filing_url = hit.get("url", "")
         if not filing_url:
             continue
-        try:
-            filing_text = sec_client.download_filing_text(filing_url, max_chars=60_000)
-        except Exception:
-            continue
-        if len(filing_text) < 200:
-            continue
-        documents.append({
+        results.append({
             "entity_name": hit.get("entity_name", ""),
             "form_type": hit.get("form_type", ""),
             "file_date": hit.get("file_date", ""),
             "url": filing_url,
-            "text": _clip_text(filing_text, 14000),
         })
 
-    if not documents:
-        return {"error": "Filings matched, but no usable document text could be retrieved.", "documents": []}
+    if not results:
+        return {"error": "Comparable filings were found, but no valid filing URLs were available.", "results": []}
 
     return {
-        "documents": documents,
+        "results": results[:10],
         "hits_considered": len(hits),
-        "hits_loaded": len(documents),
+        "hits_listed": min(10, len(results)),
+    }
+
+
+def load_edgar_document_preview(sec_client: SECEdgarClient, filing: dict) -> dict | None:
+    """Load and normalize one EDGAR filing into preview text."""
+    filing_url = filing.get("url", "")
+    if not filing_url:
+        return None
+    try:
+        filing_text = sec_client.download_filing_text(filing_url, max_chars=60_000)
+    except Exception:
+        return None
+    if len(filing_text) < 200:
+        return None
+    return {
+        "entity_name": filing.get("entity_name", ""),
+        "form_type": filing.get("form_type", ""),
+        "file_date": filing.get("file_date", ""),
+        "url": filing_url,
+        "text": _clip_text(filing_text, 14000),
     }
 
 
@@ -1896,6 +1909,7 @@ def render_edit_workflow():
         st.session_state.pop("edit_edgar_compare_meta", None)
         st.session_state.pop("edit_edgar_documents", None)
         st.session_state.pop("edit_edgar_active_doc_index", None)
+        st.session_state.pop("edit_edgar_search_results", None)
         st.session_state.pop("edit_redline_edit_area", None)
         st.session_state.pop("edit_redline_source_text", None)
         st.session_state.pop("edit_preview_redline_area", None)
@@ -1914,6 +1928,8 @@ def render_edit_workflow():
         st.session_state.edit_edgar_documents = []
     if "edit_edgar_active_doc_index" not in st.session_state:
         st.session_state.edit_edgar_active_doc_index = 0
+    if "edit_edgar_search_results" not in st.session_state:
+        st.session_state.edit_edgar_search_results = []
     if "edit_redline_source_text" not in st.session_state:
         st.session_state.edit_redline_source_text = ""
     if "edit_ai_proposal_text" not in st.session_state:
@@ -1960,6 +1976,7 @@ def render_edit_workflow():
                 st.session_state.edit_edgar_compare_meta = None
                 st.session_state.edit_edgar_documents = []
                 st.session_state.edit_edgar_active_doc_index = 0
+                st.session_state.edit_edgar_search_results = []
                 st.session_state.edit_redline_edit_area = build_diff_edit_markup(text, text)[0]
                 st.session_state.edit_redline_source_text = text
                 st.session_state.edit_preview_redline_area = st.session_state.edit_redline_edit_area
@@ -2217,6 +2234,7 @@ def render_edit_workflow():
                 st.session_state.pop("edit_edgar_compare_meta", None)
                 st.session_state.pop("edit_edgar_documents", None)
                 st.session_state.pop("edit_edgar_active_doc_index", None)
+                st.session_state.pop("edit_edgar_search_results", None)
                 st.session_state.pop("edit_redline_edit_area", None)
                 st.session_state.pop("edit_redline_source_text", None)
                 st.session_state.pop("edit_preview_redline_area", None)
@@ -2251,7 +2269,7 @@ def render_edit_workflow():
                 value=st.session_state.get("edit_edgar_forms", "8-K,10-K,10-Q"),
                 key="edit_edgar_forms",
             )
-            max_results = st.slider("Comparable filings to load", min_value=1, max_value=10, value=5, key="edit_edgar_max_results")
+            max_results = st.slider("Top comparable results", min_value=1, max_value=10, value=10, key="edit_edgar_max_results")
 
             if not sec_client.is_configured():
                 st.info("SEC EDGAR User-Agent is not configured. Add it in Settings to enable comparisons.")
@@ -2261,7 +2279,7 @@ def render_edit_workflow():
                     st.error("Set SEC EDGAR User-Agent in Settings first.")
                 else:
                     form_types = [f.strip().upper() for f in edgar_forms_raw.split(",") if f.strip()]
-                    with st.spinner("Searching and loading comparable EDGAR filings..."):
+                    with st.spinner("Searching comparable EDGAR filings..."):
                         result = search_edgar_comparable_documents(
                             sec_client=sec_client,
                             query=edgar_query,
@@ -2270,25 +2288,55 @@ def render_edit_workflow():
                         )
                     if result.get("error"):
                         st.error(result["error"])
-                        st.session_state.edit_edgar_documents = []
-                        st.session_state.edit_edgar_active_doc_index = 0
+                        st.session_state.edit_edgar_search_results = []
                         st.session_state.edit_edgar_compare_meta = None
                     else:
-                        st.session_state.edit_edgar_documents = result.get("documents", [])
-                        st.session_state.edit_edgar_active_doc_index = 0
+                        st.session_state.edit_edgar_search_results = result.get("results", [])
                         st.session_state.edit_edgar_compare_meta = {
                             "hits_considered": result.get("hits_considered", 0),
-                            "hits_loaded": result.get("hits_loaded", 0),
+                            "hits_listed": result.get("hits_listed", 0),
                         }
-                        st.success(f"Loaded {len(st.session_state.edit_edgar_documents)} comparable EDGAR document(s).")
+                        st.success(f"Listed {len(st.session_state.edit_edgar_search_results)} comparable EDGAR result(s).")
 
             compare_meta = st.session_state.get("edit_edgar_compare_meta")
             if compare_meta:
                 st.caption(
-                    f"Comparable filings loaded: {compare_meta.get('hits_loaded', 0)} / "
+                    f"Top results listed: {compare_meta.get('hits_listed', 0)} / "
                     f"{compare_meta.get('hits_considered', 0)} matched"
                 )
-                st.caption("Use the 'EDGAR Reference Document' list in Working Draft to open and review each filing.")
+
+            search_results = st.session_state.get("edit_edgar_search_results", [])
+            if search_results:
+                st.markdown("#### Comparable EDGAR Results")
+                for i, filing in enumerate(search_results):
+                    c1, c2 = st.columns([4, 1])
+                    with c1:
+                        st.markdown(
+                            f"**{i + 1}. {filing.get('entity_name', 'Unknown')}** | "
+                            f"{filing.get('form_type', 'N/A')} | {filing.get('file_date', 'N/A')}"
+                        )
+                        if filing.get("url"):
+                            st.markdown(f"[Open filing index]({filing['url']})")
+                    with c2:
+                        if st.button("Load Preview", key=f"edit_edgar_load_{i}", use_container_width=True):
+                            with st.spinner("Loading EDGAR filing preview..."):
+                                loaded = load_edgar_document_preview(sec_client, filing)
+                            if not loaded:
+                                st.warning("Could not load usable text for that filing.")
+                            else:
+                                existing_urls = {d.get("url", "") for d in st.session_state.get("edit_edgar_documents", [])}
+                                if loaded.get("url") not in existing_urls:
+                                    st.session_state.edit_edgar_documents.append(loaded)
+                                    st.session_state.edit_edgar_active_doc_index = len(st.session_state.edit_edgar_documents) - 1
+                                else:
+                                    for idx, d in enumerate(st.session_state.edit_edgar_documents):
+                                        if d.get("url") == loaded.get("url"):
+                                            st.session_state.edit_edgar_active_doc_index = idx
+                                            break
+                                st.success("Loaded into EDGAR Reference Document preview.")
+                                st.rerun()
+
+                st.caption("Use the Working Draft 'EDGAR Reference Document' picker to preview loaded filings for copy/paste drafting.")
 
         for msg in st.session_state.edit_chat_messages:
             with st.chat_message(msg["role"]):
@@ -2690,6 +2738,7 @@ def render_create_workflow():
                 st.session_state.edit_edgar_compare_meta = None
                 st.session_state.edit_edgar_documents = []
                 st.session_state.edit_edgar_active_doc_index = 0
+                st.session_state.edit_edgar_search_results = []
                 st.session_state.edit_ai_proposal_text = None
                 st.session_state.edit_ai_proposal_base = ""
                 st.session_state.edit_ai_proposal_note = ""
