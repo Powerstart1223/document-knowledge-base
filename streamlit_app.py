@@ -402,6 +402,64 @@ def build_diff_highlight_html(original_text: str, revised_text: str) -> tuple[st
     return "".join(html_parts), add_count, del_count
 
 
+def build_diff_edit_markup(original_text: str, revised_text: str) -> tuple[str, int, int]:
+    """Return editable redline markup using [[+added+]] and [[-deleted-]] markers."""
+
+    def _tokenize(content: str) -> list[str]:
+        return re.findall(r"\s+|[A-Za-z0-9_]+|[^\w\s]", content or "")
+
+    old_tokens = _tokenize(original_text)
+    new_tokens = _tokenize(revised_text)
+    sm = difflib.SequenceMatcher(a=old_tokens, b=new_tokens)
+
+    parts: list[str] = []
+    add_count = 0
+    del_count = 0
+
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "equal":
+            parts.append("".join(new_tokens[j1:j2]))
+        elif op == "insert":
+            inserted = "".join(new_tokens[j1:j2])
+            add_count += sum(1 for t in new_tokens[j1:j2] if t.strip())
+            parts.append(f"[[+{inserted}+]]")
+        elif op == "delete":
+            deleted = "".join(old_tokens[i1:i2])
+            del_count += sum(1 for t in old_tokens[i1:i2] if t.strip())
+            parts.append(f"[[-{deleted}-]]")
+        elif op == "replace":
+            deleted = "".join(old_tokens[i1:i2])
+            inserted = "".join(new_tokens[j1:j2])
+            del_count += sum(1 for t in old_tokens[i1:i2] if t.strip())
+            add_count += sum(1 for t in new_tokens[j1:j2] if t.strip())
+            parts.append(f"[[-{deleted}-]][[+{inserted}+]]")
+
+    return "".join(parts), add_count, del_count
+
+
+def apply_edit_markup_to_text(markup_text: str) -> str:
+    """Convert editable redline markup back to plain revised text."""
+    if markup_text.count("[[+") != markup_text.count("+]]"):
+        raise ValueError("Unbalanced addition markers. Use [[+added text+]].")
+    if markup_text.count("[[-") != markup_text.count("-]]"):
+        raise ValueError("Unbalanced deletion markers. Use [[-deleted text-]].")
+
+    pattern = re.compile(r"\[\[\+(.*?)\+\]\]|\[\[\-(.*?)\-\]\]", flags=re.DOTALL)
+    out = []
+    cursor = 0
+    for m in pattern.finditer(markup_text):
+        out.append(markup_text[cursor:m.start()])
+        added = m.group(1)
+        deleted = m.group(2)
+        if added is not None:
+            out.append(added)
+        elif deleted is not None:
+            pass
+        cursor = m.end()
+    out.append(markup_text[cursor:])
+    return "".join(out)
+
+
 def _normalize_similarity_text(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", (text or "").strip().lower())
     return re.sub(r"[^a-z0-9\s]", "", cleaned)
@@ -471,6 +529,7 @@ def run_edgar_clause_compare(
 
     peer_units: list[dict] = []
     used_hits: list[dict] = []
+    retrieved_documents: list[dict] = []
     for hit in hits:
         filing_url = hit.get("url", "")
         if not filing_url:
@@ -482,11 +541,21 @@ def run_edgar_clause_compare(
         if len(filing_text) < 200:
             continue
         used_hits.append(hit)
+        retrieved_documents.append({
+            "entity_name": hit.get("entity_name", ""),
+            "form_type": hit.get("form_type", ""),
+            "file_date": hit.get("file_date", ""),
+            "url": hit.get("url", ""),
+            "text": _clip_text(filing_text, 14000),
+        })
         for unit in _split_for_clause_comparison(filing_text, max_units=16, max_chars=1000):
             peer_units.append({"text": unit["text"], "title": unit["title"], "source": hit})
 
     if not peer_units:
-        return {"error": "Matched filings were found, but no usable text could be extracted from them."}
+        return {
+            "error": "Matched filings were found, but no usable text could be extracted from them.",
+            "documents": retrieved_documents,
+        }
 
     candidates = []
     for u in user_units:
@@ -505,7 +574,10 @@ def run_edgar_clause_compare(
             candidates.append(best)
 
     if not candidates:
-        return {"error": "No sufficiently similar clauses were found in EDGAR results. Try broader query or lower threshold."}
+        return {
+            "error": "No sufficiently similar clauses were found in EDGAR results. Try broader query or lower threshold.",
+            "documents": retrieved_documents,
+        }
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
     suggestions = []
@@ -544,7 +616,13 @@ def run_edgar_clause_compare(
             "source": {"entity_name": source.get("entity_name", ""), "form_type": source.get("form_type", ""), "file_date": source.get("file_date", ""), "url": source.get("url", "")},
         })
 
-    return {"hits_considered": len(hits), "hits_used": len(used_hits), "peer_units": len(peer_units), "suggestions": suggestions}
+    return {
+        "hits_considered": len(hits),
+        "hits_used": len(used_hits),
+        "peer_units": len(peer_units),
+        "suggestions": suggestions,
+        "documents": retrieved_documents,
+    }
 
 
 def infer_document_type_from_description(description: str) -> tuple[str, str]:
@@ -1768,6 +1846,9 @@ def render_edit_workflow():
         st.session_state.pop("edit_document_original", None)
         st.session_state.pop("edit_edgar_suggestions", None)
         st.session_state.pop("edit_edgar_compare_meta", None)
+        st.session_state.pop("edit_edgar_documents", None)
+        st.session_state.pop("edit_edgar_active_doc_index", None)
+        st.session_state.pop("edit_redline_edit_area", None)
         st.rerun()
 
     if "edit_revision_goal" not in st.session_state:
@@ -1776,6 +1857,10 @@ def render_edit_workflow():
         st.session_state.edit_edgar_suggestions = []
     if "edit_edgar_compare_meta" not in st.session_state:
         st.session_state.edit_edgar_compare_meta = None
+    if "edit_edgar_documents" not in st.session_state:
+        st.session_state.edit_edgar_documents = []
+    if "edit_edgar_active_doc_index" not in st.session_state:
+        st.session_state.edit_edgar_active_doc_index = 0
 
     if "edit_document_text" not in st.session_state:
         render_workflow_header("Edit Existing Document", "Upload one document and apply targeted revisions.", progress=0.33, step_note="Step 1 of 3: Upload")
@@ -1812,6 +1897,9 @@ def render_edit_workflow():
                 st.session_state.edit_original_file_bytes = raw_bytes if ext in [".docx", ".docm"] else None
                 st.session_state.edit_edgar_suggestions = []
                 st.session_state.edit_edgar_compare_meta = None
+                st.session_state.edit_edgar_documents = []
+                st.session_state.edit_edgar_active_doc_index = 0
+                st.session_state.edit_redline_edit_area = build_diff_edit_markup(text, text)[0]
                 st.success(f"Loaded {uploaded_file.name} ({len(text):,} characters)")
                 st.rerun()
         return
@@ -1871,15 +1959,97 @@ def render_edit_workflow():
         if edited_text != st.session_state.edit_document_text:
             st.session_state.edit_document_text = edited_text
 
+        edgar_docs = st.session_state.get("edit_edgar_documents", [])
+        if edgar_docs:
+            st.markdown("#### EDGAR Reference Document")
+            active_idx = st.selectbox(
+                "Retrieved EDGAR document",
+                options=list(range(len(edgar_docs))),
+                index=min(st.session_state.get("edit_edgar_active_doc_index", 0), len(edgar_docs) - 1),
+                format_func=lambda i: (
+                    f"{i + 1}. {edgar_docs[i].get('entity_name', 'Unknown')} "
+                    f"| {edgar_docs[i].get('form_type', 'N/A')} | {edgar_docs[i].get('file_date', 'N/A')}"
+                ),
+                key="edit_edgar_doc_selector",
+            )
+            st.session_state.edit_edgar_active_doc_index = active_idx
+            active_doc = edgar_docs[active_idx]
+            if active_doc.get("url"):
+                st.markdown(f"[Open SEC filing source]({active_doc['url']})")
+            st.text_area(
+                "EDGAR document text",
+                value=active_doc.get("text", ""),
+                height=220,
+                disabled=True,
+                key=f"edit_edgar_doc_text_{active_idx}",
+            )
+
         diff_html, add_count, del_count = build_diff_highlight_html(
             st.session_state.get("edit_document_original", ""),
             st.session_state.edit_document_text,
         )
-        st.markdown(f"#### Redline Preview (+{add_count} / -{del_count})")
+
+        if len(st.session_state.edit_document_history) > 1:
+            prev_version_text = st.session_state.edit_document_history[-2]["text"]
+            latest_diff_html, latest_add_count, latest_del_count = build_diff_highlight_html(
+                prev_version_text,
+                st.session_state.edit_document_text,
+            )
+            st.markdown(f"#### Latest Revision Delta (+{latest_add_count} / -{latest_del_count})")
+            st.markdown(
+                f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{latest_diff_html}</div>",
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(f"#### Total Redline vs Original (+{add_count} / -{del_count})")
         st.markdown(
             f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{diff_html}</div>",
             unsafe_allow_html=True,
         )
+
+        editable_markup, markup_add_count, markup_del_count = build_diff_edit_markup(
+            st.session_state.get("edit_document_original", ""),
+            st.session_state.edit_document_text,
+        )
+        if "edit_redline_edit_area" not in st.session_state:
+            st.session_state.edit_redline_edit_area = editable_markup
+
+        with st.expander(f"Editable Redline Mode (+{markup_add_count} / -{markup_del_count})", expanded=False):
+            st.caption("Edit inline using [[+added text+]] and [[-deleted text-]] markers, then apply.")
+            rr1, rr2 = st.columns(2)
+            with rr1:
+                if st.button("Refresh from Current Redline", key="edit_redline_refresh", use_container_width=True):
+                    st.session_state.edit_redline_edit_area = editable_markup
+                    st.rerun()
+            with rr2:
+                if st.button("Apply Redline Edits", key="edit_redline_apply", use_container_width=True):
+                    try:
+                        new_text = apply_edit_markup_to_text(st.session_state.get("edit_redline_edit_area", ""))
+                        if new_text != st.session_state.edit_document_text:
+                            version_num = len(st.session_state.edit_document_history)
+                            st.session_state.edit_document_text = new_text
+                            st.session_state.edit_preview_area = new_text
+                            st.session_state.edit_document_history.append({
+                                "version": version_num,
+                                "text": new_text,
+                                "change": "Applied editable redline changes",
+                            })
+                            st.session_state.edit_redline_edit_area = build_diff_edit_markup(
+                                st.session_state.get("edit_document_original", ""),
+                                new_text,
+                            )[0]
+                            st.rerun()
+                        else:
+                            st.info("No text changes detected from redline markup.")
+                    except Exception as redline_err:
+                        st.error(f"Could not apply redline edits: {redline_err}")
+
+            st.text_area(
+                "Editable redline",
+                key="edit_redline_edit_area",
+                height=220,
+                label_visibility="collapsed",
+            )
 
         a, b, c = st.columns(3)
         with a:
@@ -1971,6 +2141,9 @@ def render_edit_workflow():
                 st.session_state.pop("edit_document_original", None)
                 st.session_state.pop("edit_edgar_suggestions", None)
                 st.session_state.pop("edit_edgar_compare_meta", None)
+                st.session_state.pop("edit_edgar_documents", None)
+                st.session_state.pop("edit_edgar_active_doc_index", None)
+                st.session_state.pop("edit_redline_edit_area", None)
                 st.rerun()
 
         if len(st.session_state.edit_document_history) > 1:
@@ -2026,6 +2199,8 @@ def render_edit_workflow():
                         st.error(result["error"])
                         st.session_state.edit_edgar_suggestions = []
                         st.session_state.edit_edgar_compare_meta = None
+                        st.session_state.edit_edgar_documents = result.get("documents", [])
+                        st.session_state.edit_edgar_active_doc_index = 0
                     else:
                         st.session_state.edit_edgar_suggestions = result.get("suggestions", [])
                         st.session_state.edit_edgar_compare_meta = {
@@ -2033,6 +2208,8 @@ def render_edit_workflow():
                             "hits_used": result.get("hits_used", 0),
                             "peer_units": result.get("peer_units", 0),
                         }
+                        st.session_state.edit_edgar_documents = result.get("documents", [])
+                        st.session_state.edit_edgar_active_doc_index = 0
                         st.success(f"Generated {len(st.session_state.edit_edgar_suggestions)} cited suggestion(s).")
 
             compare_meta = st.session_state.get("edit_edgar_compare_meta")
@@ -2123,7 +2300,7 @@ def render_create_workflow():
             "create_setup_complete", "create_setup_goal", "create_setup_style", "create_setup_guidance",
             "create_doc_type", "create_doc_type_label", "create_fields", "create_generated_text", "create_chat_messages",
             "create_doc_description", "create_detection_reason", "create_doc_description_input",
-            "create_original_generated_text"
+            "create_original_generated_text", "create_redline_edit_area"
         ]:
             st.session_state.pop(k, None)
         st.rerun()
@@ -2312,6 +2489,7 @@ def render_create_workflow():
 
                             st.session_state.create_generated_text = text_out
                             st.session_state.create_original_generated_text = text_out
+                            st.session_state.create_redline_edit_area = build_diff_edit_markup(text_out, text_out)[0]
                             st.session_state.create_chat_messages = []
                             st.rerun()
                         except Exception as e:
@@ -2355,13 +2533,51 @@ def render_create_workflow():
             unsafe_allow_html=True,
         )
 
+        create_edit_markup, create_markup_add, create_markup_del = build_diff_edit_markup(
+            st.session_state.get("create_original_generated_text", ""),
+            st.session_state.create_generated_text,
+        )
+        if "create_redline_edit_area" not in st.session_state:
+            st.session_state.create_redline_edit_area = create_edit_markup
+
+        with st.expander(f"Editable Redline Mode (+{create_markup_add} / -{create_markup_del})", expanded=False):
+            st.caption("Edit inline using [[+added text+]] and [[-deleted text-]] markers, then apply.")
+            cr1, cr2 = st.columns(2)
+            with cr1:
+                if st.button("Refresh from Current Redline", key="create_redline_refresh", use_container_width=True):
+                    st.session_state.create_redline_edit_area = create_edit_markup
+                    st.rerun()
+            with cr2:
+                if st.button("Apply Redline Edits", key="create_redline_apply", use_container_width=True):
+                    try:
+                        create_new_text = apply_edit_markup_to_text(st.session_state.get("create_redline_edit_area", ""))
+                        if create_new_text != st.session_state.create_generated_text:
+                            st.session_state.create_generated_text = create_new_text
+                            st.session_state.create_preview_area = create_new_text
+                            st.session_state.create_redline_edit_area = build_diff_edit_markup(
+                                st.session_state.get("create_original_generated_text", ""),
+                                create_new_text,
+                            )[0]
+                            st.rerun()
+                        else:
+                            st.info("No text changes detected from redline markup.")
+                    except Exception as create_redline_err:
+                        st.error(f"Could not apply redline edits: {create_redline_err}")
+
+            st.text_area(
+                "Editable redline",
+                key="create_redline_edit_area",
+                height=220,
+                label_visibility="collapsed",
+            )
+
         a, b, c = st.columns(3)
         with a:
             if st.button("Start Over", use_container_width=True, key="create_start_over_exec"):
                 for k in [
                     "create_doc_type", "create_fields", "create_generated_text", "create_chat_messages",
                     "create_doc_description", "create_detection_reason", "create_doc_description_input",
-                    "create_original_generated_text"
+                    "create_original_generated_text", "create_redline_edit_area"
                 ]:
                     st.session_state.pop(k, None)
                 st.rerun()
@@ -2414,6 +2630,8 @@ def render_create_workflow():
                 st.session_state.edit_original_file_bytes = DocumentGenerator.text_to_docx(baseline_text, generated_name)
                 st.session_state.edit_edgar_suggestions = []
                 st.session_state.edit_edgar_compare_meta = None
+                st.session_state.edit_edgar_documents = []
+                st.session_state.edit_edgar_active_doc_index = 0
                 st.session_state.workflow_mode = "edit"
                 st.rerun()
 
