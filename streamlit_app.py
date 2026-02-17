@@ -379,13 +379,13 @@ def build_diff_highlight_html(original_text: str, revised_text: str) -> tuple[st
             inserted = "".join(new_tokens[j1:j2])
             add_count += sum(1 for t in new_tokens[j1:j2] if t.strip())
             html_parts.append(
-                f"<span style='background:#d9fbe2;color:#0b3d20;padding:0 0.08rem;border-radius:2px;'>{html_lib.escape(inserted)}</span>"
+                f"<span style='color:#0b57d0;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:2px;padding:0 0.04rem;border-radius:2px;'>{html_lib.escape(inserted)}</span>"
             )
         elif op == "delete":
             deleted = "".join(old_tokens[i1:i2])
             del_count += sum(1 for t in old_tokens[i1:i2] if t.strip())
             html_parts.append(
-                f"<span style='background:#ffe1e1;color:#7d1515;text-decoration:line-through;padding:0 0.08rem;border-radius:2px;'>{html_lib.escape(deleted)}</span>"
+                f"<span style='color:#b42318;text-decoration:line-through;text-decoration-thickness:2px;padding:0 0.04rem;border-radius:2px;'>{html_lib.escape(deleted)}</span>"
             )
         elif op == "replace":
             deleted = "".join(old_tokens[i1:i2])
@@ -393,10 +393,10 @@ def build_diff_highlight_html(original_text: str, revised_text: str) -> tuple[st
             del_count += sum(1 for t in old_tokens[i1:i2] if t.strip())
             add_count += sum(1 for t in new_tokens[j1:j2] if t.strip())
             html_parts.append(
-                f"<span style='background:#ffe1e1;color:#7d1515;text-decoration:line-through;padding:0 0.08rem;border-radius:2px;'>{html_lib.escape(deleted)}</span>"
+                f"<span style='color:#b42318;text-decoration:line-through;text-decoration-thickness:2px;padding:0 0.04rem;border-radius:2px;'>{html_lib.escape(deleted)}</span>"
             )
             html_parts.append(
-                f"<span style='background:#d9fbe2;color:#0b3d20;padding:0 0.08rem;border-radius:2px;'>{html_lib.escape(inserted)}</span>"
+                f"<span style='color:#0b57d0;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:2px;padding:0 0.04rem;border-radius:2px;'>{html_lib.escape(inserted)}</span>"
             )
 
     return "".join(html_parts), add_count, del_count
@@ -2038,24 +2038,39 @@ def render_edit_workflow():
             st.session_state.edit_document_text,
         )
 
-        latest_base_text = None
-        latest_label = "Latest Revision Delta"
-        if st.session_state.edit_document_history:
-            last_checkpoint_text = st.session_state.edit_document_history[-1]["text"]
-            if last_checkpoint_text != st.session_state.edit_document_text:
-                latest_base_text = last_checkpoint_text
-                latest_label = "Latest Manual Delta"
-            elif len(st.session_state.edit_document_history) > 1:
-                latest_base_text = st.session_state.edit_document_history[-2]["text"]
+        history = st.session_state.edit_document_history
+        latest_ai_text = history[-1]["text"] if history else st.session_state.edit_document_text
 
-        if latest_base_text is not None and latest_base_text != st.session_state.edit_document_text:
+        if len(history) > 1:
+            prev_ai_text = history[-2]["text"]
             latest_diff_html, latest_add_count, latest_del_count = build_diff_highlight_html(
-                latest_base_text,
-                st.session_state.edit_document_text,
+                prev_ai_text,
+                latest_ai_text,
             )
-            st.markdown(f"#### {latest_label} (+{latest_add_count} / -{latest_del_count})")
+            st.markdown(f"#### Latest AI Revision Delta (+{latest_add_count} / -{latest_del_count})")
             st.markdown(
                 f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{latest_diff_html}</div>",
+                unsafe_allow_html=True,
+            )
+
+        ai_total_html, ai_total_add, ai_total_del = build_diff_highlight_html(
+            st.session_state.get("edit_document_original", ""),
+            latest_ai_text,
+        )
+        st.markdown(f"#### Total AI Revisions vs Original (+{ai_total_add} / -{ai_total_del})")
+        st.markdown(
+            f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{ai_total_html}</div>",
+            unsafe_allow_html=True,
+        )
+
+        if latest_ai_text != st.session_state.edit_document_text:
+            draft_delta_html, draft_add, draft_del = build_diff_highlight_html(
+                latest_ai_text,
+                st.session_state.edit_document_text,
+            )
+            st.markdown(f"#### Current Draft Delta (Not Yet AI-Committed) (+{draft_add} / -{draft_del})")
+            st.markdown(
+                f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{draft_delta_html}</div>",
                 unsafe_allow_html=True,
             )
 
