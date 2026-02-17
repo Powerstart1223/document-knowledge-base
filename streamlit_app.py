@@ -77,10 +77,19 @@ def is_streamlit_cloud() -> bool:
            os.getenv("STREAMLIT_RUNTIME_ENV") == "cloud"
 
 
+FORCE_OLLAMA_FOR_ALL_USERS = os.getenv("FORCE_OLLAMA_FOR_ALL_USERS", "false").lower() == "true"
+SHARED_KNOWLEDGE_SCOPE = os.getenv("SHARED_KNOWLEDGE_SCOPE", "true").lower() == "true"
+SHARED_SCOPE_USER_ID = int(os.getenv("SHARED_SCOPE_USER_ID", "0"))
+SHARED_COLLECTION_NAME = os.getenv("SHARED_COLLECTION_NAME", "documents_shared")
+
+
 def get_default_llm_provider() -> str:
     """Auto-detect best LLM provider based on environment.
-    Defaults to Ollama for local deployments — all users share the host's Ollama instance.
+    Defaults to Ollama for local deployments - all users share the host's Ollama instance.
     """
+    if FORCE_OLLAMA_FOR_ALL_USERS:
+        return "ollama"
+
     try:
         if "LLM_PROVIDER" in st.secrets:
             return st.secrets.get("LLM_PROVIDER", "ollama")
@@ -94,7 +103,6 @@ def get_default_llm_provider() -> str:
     if is_streamlit_cloud():
         return "openai"
 
-    # Default to Ollama for local deployments
     return "ollama"
 
 
@@ -148,6 +156,18 @@ for key, val in _DEFAULTS.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
+if FORCE_OLLAMA_FOR_ALL_USERS:
+    st.session_state.llm_provider = "ollama"
+
+
+def get_data_scope_user_id() -> int:
+    """Return shared or per-user scope id for knowledge/indexing operations."""
+    if SHARED_KNOWLEDGE_SCOPE:
+        return SHARED_SCOPE_USER_ID
+    if require_auth(st.session_state):
+        return st.session_state.current_user.user_id
+    return 0
+
 
 # ======================================================================
 # ChromaDB setup with per-user collections
@@ -184,9 +204,10 @@ def get_background_scanner(user_id: int, _llm, _collection, _knowledge_db):
 
 
 def get_collection():
-    """Get the ChromaDB collection for the current user."""
-    if not require_auth(st.session_state):
-        # Fallback for unauthenticated (shouldn't happen)
+    """Get the ChromaDB collection for the current scope (shared or per-user)."""
+    if SHARED_KNOWLEDGE_SCOPE:
+        collection_name = SHARED_COLLECTION_NAME
+    elif not require_auth(st.session_state):
         collection_name = "documents"
     else:
         user = st.session_state.current_user
@@ -203,18 +224,18 @@ def get_collection():
 
 def get_llm() -> LLMBackend:
     """Build an LLMBackend from current session-state settings."""
-    if st.session_state.llm_provider == "ollama":
+    provider = "ollama" if FORCE_OLLAMA_FOR_ALL_USERS else st.session_state.llm_provider
+    if provider == "ollama":
         return LLMBackend(
             provider="ollama",
             model=st.session_state.llm_model,
             base_url=st.session_state.llm_base_url,
         )
-    else:
-        return LLMBackend(
-            provider="openai",
-            model=st.session_state.llm_model,
-            api_key=st.session_state.openai_api_key,
-        )
+    return LLMBackend(
+        provider="openai",
+        model=st.session_state.llm_model,
+        api_key=st.session_state.openai_api_key,
+    )
 
 
 def get_sec_client() -> SECEdgarClient:
@@ -390,7 +411,7 @@ def process_uploaded_files(uploaded_files: List, document_type: str):
 
     for i, f in enumerate(uploaded_files):
         filename = f.name
-        user_id = st.session_state.current_user.user_id
+        user_id = get_data_scope_user_id()
 
         status.text(f"Processing {filename}...")
         try:
@@ -1310,13 +1331,20 @@ def render_settings_tab():
         </div>
         """, unsafe_allow_html=True)
 
-        provider = st.radio(
-            "Select AI Provider",
-            options=["ollama", "openai"],
-            format_func=lambda p: "Ollama (Local, free)" if p == "ollama" else "OpenAI (Cloud API)",
-            index=0 if st.session_state.llm_provider == "ollama" else 1,
-            key="settings_provider",
-        )
+        if SHARED_KNOWLEDGE_SCOPE:
+            st.info("Shared learning is enabled: uploads from all users feed one local knowledge base.")
+
+        if FORCE_OLLAMA_FOR_ALL_USERS:
+            provider = "ollama"
+            st.info("Self-host mode: Ollama is enforced for all users.")
+        else:
+            provider = st.radio(
+                "Select AI Provider",
+                options=["ollama", "openai"],
+                format_func=lambda p: "Ollama (Local, recommended)" if p == "ollama" else "OpenAI (API key)",
+                index=0 if st.session_state.llm_provider == "ollama" else 1,
+                key="settings_provider",
+            )
 
         model = st.session_state.llm_model
         base_url = st.session_state.llm_base_url
@@ -2108,6 +2136,9 @@ def render_learn_workflow():
     else:
         st.caption("Upload one or more files to enable indexing.")
 
+    if SHARED_KNOWLEDGE_SCOPE:
+        st.caption("Shared mode: these uploads improve retrieval/templates for all users on this host.")
+
     if uploaded_files and st.button("Learn from Uploaded Documents", type="primary", use_container_width=True, key="learn_process_btn"):
         with st.spinner("Indexing uploaded documents..."):
             summary = process_uploaded_files(uploaded_files, document_type=doc_type)
@@ -2151,13 +2182,17 @@ def render_settings_page():
         </div>
         """, unsafe_allow_html=True)
 
-        provider = st.radio(
-            "Select AI Provider",
-            options=["ollama", "openai"],
-            format_func=lambda p: "Ollama (Local, free)" if p == "ollama" else "OpenAI (Cloud API)",
-            index=0 if st.session_state.llm_provider == "ollama" else 1,
-            key="settings_provider",
-        )
+        if FORCE_OLLAMA_FOR_ALL_USERS:
+            provider = "ollama"
+            st.info("Self-host mode: Ollama is enforced for all users.")
+        else:
+            provider = st.radio(
+                "Select AI Provider",
+                options=["ollama", "openai"],
+                format_func=lambda p: "Ollama (Local, free)" if p == "ollama" else "OpenAI (Cloud API)",
+                index=0 if st.session_state.llm_provider == "ollama" else 1,
+                key="settings_provider",
+            )
 
         model = st.session_state.llm_model
         base_url = st.session_state.llm_base_url
@@ -2275,15 +2310,16 @@ def render_knowledge_base_page():
 
     knowledge_db = get_knowledge_db()
     # Lazy-init scanner only on Knowledge Base page (admin/manual use).
-    scanner = ScannerManager.get_instance(current_user.user_id)
+    scope_user_id = get_data_scope_user_id()
+    scanner = ScannerManager.get_instance(scope_user_id)
     if scanner is None:
         try:
-            scanner = get_background_scanner(current_user.user_id, get_llm(), get_collection(), knowledge_db)
+            scanner = get_background_scanner(scope_user_id, get_llm(), get_collection(), knowledge_db)
         except Exception as e:
             logger.error(f"Failed to initialize scanner on KB page: {e}")
             scanner = None
 
-    stats = knowledge_db.get_stats(user_id=current_user.user_id)
+    stats = knowledge_db.get_stats(user_id=scope_user_id)
 
     # Overview stats
     col1, col2, col3, col4 = st.columns(4)
@@ -2326,7 +2362,7 @@ def render_knowledge_base_page():
         st.markdown("### Learned Document Templates")
         st.caption("Templates automatically learned from your real documents")
 
-        doc_types = knowledge_db.get_all_document_types(user_id=current_user.user_id)
+        doc_types = knowledge_db.get_all_document_types(user_id=scope_user_id)
 
         if not doc_types:
             st.info("No learned templates yet. Run a scan to build templates from your documents.")
@@ -2336,7 +2372,7 @@ def render_knowledge_base_page():
                 count = type_info["count"]
 
                 with st.expander(f"📄 {doc_type} — Learned from {count} documents"):
-                    learned = knowledge_db.get_learned_template(doc_type, user_id=current_user.user_id)
+                    learned = knowledge_db.get_learned_template(doc_type, user_id=scope_user_id)
 
                     if learned:
                         st.caption(f"Last updated: {learned['last_updated']}")
@@ -2365,7 +2401,7 @@ def render_knowledge_base_page():
             )
 
             if selected_type:
-                files = knowledge_db.get_scanned_files_by_type(selected_type, user_id=current_user.user_id)
+                files = knowledge_db.get_scanned_files_by_type(selected_type, user_id=scope_user_id)
 
                 st.caption(f"Found {len(files)} documents")
 
@@ -2385,7 +2421,8 @@ def render_knowledge_base_page():
     with kb_tab3:
         st.markdown("### Scanner Configuration")
 
-        scanner = ScannerManager.get_instance(current_user.user_id)
+        scope_user_id = get_data_scope_user_id()
+        scanner = ScannerManager.get_instance(scope_user_id)
         if scanner:
             status = scanner.get_status()
 
@@ -2431,7 +2468,7 @@ def render_knowledge_base_page():
                             llm=llm,
                             chroma_collection=collection,
                             knowledge_db=knowledge_db,
-                            user_id=current_user.user_id,
+                            user_id=scope_user_id,
                         )
                         scanner_instance.build_learned_templates()
                         st.success("Templates rebuilt")
@@ -2457,7 +2494,7 @@ def render_knowledge_base_page():
             st.warning("Background scanner is not initialized yet.")
             if st.button("Initialize Scanner", key="kb_init_scanner", use_container_width=True):
                 try:
-                    _ = get_background_scanner(current_user.user_id, get_llm(), get_collection(), knowledge_db)
+                    _ = get_background_scanner(scope_user_id, get_llm(), get_collection(), knowledge_db)
                     st.success("Scanner initialized")
                     st.rerun()
                 except Exception as init_err:
@@ -2467,7 +2504,7 @@ def render_knowledge_base_page():
     with kb_tab4:
         st.markdown("### Recent Scan History")
 
-        history = knowledge_db.get_scan_history(limit=20, user_id=current_user.user_id)
+        history = knowledge_db.get_scan_history(limit=20, user_id=scope_user_id)
 
         if not history:
             st.info("No scan history yet.")
