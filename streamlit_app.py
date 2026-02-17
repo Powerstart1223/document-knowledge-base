@@ -1955,58 +1955,21 @@ def render_edit_workflow():
 
     with col_preview:
         st.markdown("### Working Draft")
-        draft_view_mode = st.radio(
-            "Draft view",
-            options=["Clean Draft", "Redline Draft"],
-            horizontal=True,
-            key="edit_draft_view_mode",
-            help="Redline Draft uses [[+added+]] and [[-deleted-]] markers like revision markup.",
+        edited_text = st.text_area(
+            "Working draft",
+            value=st.session_state.edit_document_text,
+            height=560,
+            key="edit_preview_area",
+            label_visibility="collapsed"
         )
-
-        editable_markup, markup_add_count, markup_del_count = build_diff_edit_markup(
-            st.session_state.get("edit_document_original", ""),
-            st.session_state.edit_document_text,
-        )
-
-        if st.session_state.get("edit_redline_source_text", "") != st.session_state.edit_document_text:
-            st.session_state.edit_redline_edit_area = editable_markup
-            st.session_state.edit_preview_redline_area = editable_markup
-            st.session_state.edit_redline_source_text = st.session_state.edit_document_text
-
-        if draft_view_mode == "Clean Draft":
-            edited_text = st.text_area(
-                "Working draft",
-                value=st.session_state.edit_document_text,
-                height=560,
-                key="edit_preview_area",
-                label_visibility="collapsed"
-            )
-            if edited_text != st.session_state.edit_document_text:
-                st.session_state.edit_document_text = edited_text
-                st.session_state.edit_redline_source_text = edited_text
-                st.session_state.edit_redline_edit_area = build_diff_edit_markup(
-                    st.session_state.get("edit_document_original", ""),
-                    edited_text,
-                )[0]
-                st.session_state.edit_preview_redline_area = st.session_state.edit_redline_edit_area
-        else:
-            st.caption(f"Editable redline markers: +{markup_add_count} / -{markup_del_count}")
-            redline_text = st.text_area(
-                "Working draft redline",
-                value=st.session_state.get("edit_preview_redline_area", editable_markup),
-                height=560,
-                key="edit_preview_redline_area",
-                label_visibility="collapsed",
-            )
-            if redline_text != st.session_state.get("edit_redline_edit_area", ""):
-                st.session_state.edit_redline_edit_area = redline_text
-                try:
-                    new_text = apply_edit_markup_to_text(redline_text)
-                    if new_text != st.session_state.edit_document_text:
-                        st.session_state.edit_document_text = new_text
-                        st.session_state.edit_redline_source_text = new_text
-                except Exception:
-                    st.caption("Redline markup is temporarily unbalanced; continue editing markers and it will sync once valid.")
+        if edited_text != st.session_state.edit_document_text:
+            st.session_state.edit_document_text = edited_text
+            st.session_state.edit_redline_source_text = edited_text
+            st.session_state.edit_redline_edit_area = build_diff_edit_markup(
+                st.session_state.get("edit_document_original", ""),
+                edited_text,
+            )[0]
+            st.session_state.edit_preview_redline_area = st.session_state.edit_redline_edit_area
 
         edgar_docs = st.session_state.get("edit_edgar_documents", [])
         if edgar_docs:
@@ -2306,6 +2269,7 @@ def render_edit_workflow():
                         version_num = len(st.session_state.edit_document_history)
                         st.session_state.edit_document_text = response
                         st.session_state.edit_redline_source_text = response
+                        st.session_state.edit_draft_view_mode = "Clean Draft"
                         st.session_state.edit_document_history.append({
                             "version": version_num,
                             "text": response,
