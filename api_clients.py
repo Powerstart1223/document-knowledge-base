@@ -8,6 +8,7 @@ External data-source clients for the Corporate Law Document Generator.
 import os
 import re
 import requests
+from urllib.parse import urljoin
 
 
 # ======================================================================
@@ -111,14 +112,65 @@ class SECEdgarClient:
         r.raise_for_status()
         return r.json()
 
+    def _absolute_sec_url(self, href: str, base_url: str) -> str:
+        href = (href or "").strip()
+        if not href:
+            return ""
+        if href.startswith("http://") or href.startswith("https://"):
+            return href
+        return urljoin(base_url, href)
+
+    def _extract_index_candidates(self, index_html: str, index_url: str) -> list[str]:
+        hrefs = re.findall(r'href=["\']([^"\']+)["\']', index_html or "", flags=re.IGNORECASE)
+        candidates = []
+        for href in hrefs:
+            abs_url = self._absolute_sec_url(href, index_url)
+            if "/Archives/" not in abs_url:
+                continue
+            lower = abs_url.lower()
+            if lower.endswith("-index.htm"):
+                continue
+            if not (lower.endswith(".htm") or lower.endswith(".html") or lower.endswith(".txt")):
+                continue
+            candidates.append(abs_url)
+
+        def _priority(u: str) -> tuple[int, int]:
+            lu = u.lower()
+            score = 0
+            if any(k in lu for k in ["ex10", "ex-10", "exhibit", "agreement", "contract"]):
+                score += 3
+            if lu.endswith(".htm") or lu.endswith(".html"):
+                score += 1
+            if lu.endswith(".txt"):
+                score += 2
+            return (-score, len(lu))
+
+        deduped = []
+        seen = set()
+        for c in sorted(candidates, key=_priority):
+            if c not in seen:
+                seen.add(c)
+                deduped.append(c)
+        return deduped
+
     def download_filing_text(self, filing_url: str, max_chars: int = 20_000) -> str:
-        """Download the raw text of a filing (truncated to *max_chars*)."""
+        """Download filing text (truncated), handling both index URLs and direct archive files."""
+        if not filing_url:
+            return ""
         if not filing_url.startswith("http"):
-            filing_url = f"https://www.sec.gov/Archives/{filing_url}"
-        r = self._session.get(filing_url, timeout=30)
+            filing_url = f"https://www.sec.gov/Archives/{filing_url.lstrip('/')}"
+
+        url = filing_url
+        if filing_url.lower().endswith("-index.htm"):
+            r_index = self._session.get(filing_url, timeout=30)
+            r_index.raise_for_status()
+            candidates = self._extract_index_candidates(r_index.text, filing_url)
+            if candidates:
+                url = candidates[0]
+
+        r = self._session.get(url, timeout=30)
         r.raise_for_status()
         text = r.text[:max_chars]
-        # Strip HTML tags for a rough plaintext conversion
         text = re.sub(r"<[^>]+>", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
         return text

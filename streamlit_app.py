@@ -314,6 +314,151 @@ def build_diff_highlight_html(original_text: str, revised_text: str) -> tuple[st
     return "".join(html_parts), add_count, del_count
 
 
+def _normalize_similarity_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip().lower())
+    return re.sub(r"[^a-z0-9\s]", "", cleaned)
+
+
+def _split_for_clause_comparison(text: str, max_units: int = 24, max_chars: int = 1200) -> list[dict]:
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    units: list[dict] = []
+    sections = [s.strip() for s in re.split(r"\n\s*\n", text) if s.strip()]
+    for idx, sec in enumerate(sections, start=1):
+        if len(sec) < 120:
+            continue
+        heading = sec.split("\n", 1)[0].strip()[:80]
+        if len(heading) < 6:
+            heading = f"Clause {idx}"
+        if len(sec) > max_chars:
+            sec = sec[:max_chars].rsplit(" ", 1)[0] + " ..."
+        units.append({"title": heading, "text": sec})
+        if len(units) >= max_units:
+            break
+
+    if not units:
+        collapsed = re.sub(r"\s+", " ", text)
+        chunk_size = max(800, min(max_chars, 1400))
+        start = 0
+        i = 1
+        while start < len(collapsed) and len(units) < max_units:
+            chunk = collapsed[start:start + chunk_size].strip()
+            if chunk:
+                units.append({"title": f"Clause {i}", "text": chunk})
+            start += chunk_size
+            i += 1
+
+    return units
+
+
+def _clip_text(text: str, limit: int = 700) -> str:
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0] + " ..."
+
+
+def run_edgar_clause_compare(
+    document_text: str,
+    sec_client: SECEdgarClient,
+    llm: LLMBackend,
+    query: str,
+    form_types: list[str],
+    max_results: int = 4,
+    similarity_floor: float = 0.34,
+    max_suggestions: int = 5,
+) -> dict:
+    if not (query or "").strip():
+        return {"error": "Enter an EDGAR query before running comparison."}
+
+    hits = sec_client.search_filings(query=query.strip(), form_types=form_types or None, max_results=max_results)
+    if not hits:
+        return {"error": "No EDGAR filings matched that query."}
+
+    user_units = _split_for_clause_comparison(document_text, max_units=20, max_chars=1200)
+    if not user_units:
+        return {"error": "Could not identify comparable clauses in the uploaded document."}
+
+    peer_units: list[dict] = []
+    used_hits: list[dict] = []
+    for hit in hits:
+        filing_url = hit.get("url", "")
+        if not filing_url:
+            continue
+        try:
+            filing_text = sec_client.download_filing_text(filing_url, max_chars=60_000)
+        except Exception:
+            continue
+        if len(filing_text) < 200:
+            continue
+        used_hits.append(hit)
+        for unit in _split_for_clause_comparison(filing_text, max_units=16, max_chars=1000):
+            peer_units.append({"text": unit["text"], "title": unit["title"], "source": hit})
+
+    if not peer_units:
+        return {"error": "Matched filings were found, but no usable text could be extracted from them."}
+
+    candidates = []
+    for u in user_units:
+        user_norm = _normalize_similarity_text(u["text"])
+        if len(user_norm) < 80:
+            continue
+        best = None
+        for p in peer_units:
+            peer_norm = _normalize_similarity_text(p["text"])
+            if len(peer_norm) < 80:
+                continue
+            score = difflib.SequenceMatcher(None, user_norm, peer_norm).ratio()
+            if best is None or score > best["score"]:
+                best = {"score": score, "user_title": u["title"], "user_text": u["text"], "peer_title": p["title"], "peer_text": p["text"], "source": p["source"]}
+        if best and best["score"] >= similarity_floor:
+            candidates.append(best)
+
+    if not candidates:
+        return {"error": "No sufficiently similar clauses were found in EDGAR results. Try broader query or lower threshold."}
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    suggestions = []
+    can_use_llm = bool(llm and llm.is_available())
+
+    for c in candidates[:max_suggestions]:
+        source = c["source"]
+        revision_prompt = (
+            "Revise the clause below using the EDGAR peer benchmark while preserving this document's parties and structure.\n\n"
+            f"Current clause:\n{_clip_text(c['user_text'], 900)}\n\n"
+            f"Peer filing benchmark ({source.get('entity_name', 'Unknown')} {source.get('form_type', '')} {source.get('file_date', '')}):\n"
+            f"{_clip_text(c['peer_text'], 900)}\n\n"
+            "Integrate stronger language where appropriate and return the full updated document."
+        )
+
+        suggestion_text = ""
+        if can_use_llm:
+            try:
+                suggestion_text = llm.chat([
+                    {"role": "system", "content": "You are a legal editing assistant. Draft one concise clause-improvement recommendation grounded in a peer SEC filing."},
+                    {"role": "user", "content": f"Current clause:\n{_clip_text(c['user_text'], 750)}\n\nPeer clause:\n{_clip_text(c['peer_text'], 750)}\n\nProvide: (1) what to change, (2) a short sample revision sentence. Keep under 120 words."},
+                ], temperature=0.2, max_tokens=220).strip()
+            except Exception:
+                suggestion_text = ""
+        if not suggestion_text:
+            suggestion_text = "Align this clause with the cited peer filing by tightening defined triggers, adding objective standards, and preserving your party-specific terms."
+
+        suggestions.append({
+            "similarity": round(c["score"], 3),
+            "current_title": c["user_title"],
+            "peer_title": c["peer_title"],
+            "current_excerpt": _clip_text(c["user_text"], 500),
+            "peer_excerpt": _clip_text(c["peer_text"], 500),
+            "suggestion_text": suggestion_text,
+            "revision_prompt": revision_prompt,
+            "source": {"entity_name": source.get("entity_name", ""), "form_type": source.get("form_type", ""), "file_date": source.get("file_date", ""), "url": source.get("url", "")},
+        })
+
+    return {"hits_considered": len(hits), "hits_used": len(used_hits), "peer_units": len(peer_units), "suggestions": suggestions}
+
+
 def infer_document_type_from_description(description: str) -> tuple[str, str]:
     """Infer best document type key from a natural language description."""
     desc = (description or "").strip()
@@ -1533,10 +1678,16 @@ def render_edit_workflow():
         st.session_state.pop("edit_revision_goal", None)
         st.session_state.pop("edit_original_file_bytes", None)
         st.session_state.pop("edit_document_original", None)
+        st.session_state.pop("edit_edgar_suggestions", None)
+        st.session_state.pop("edit_edgar_compare_meta", None)
         st.rerun()
 
     if "edit_revision_goal" not in st.session_state:
         st.session_state.edit_revision_goal = "Preserve structure; improve precision and legal clarity."
+    if "edit_edgar_suggestions" not in st.session_state:
+        st.session_state.edit_edgar_suggestions = []
+    if "edit_edgar_compare_meta" not in st.session_state:
+        st.session_state.edit_edgar_compare_meta = None
 
     if "edit_document_text" not in st.session_state:
         render_workflow_header("Edit Existing Document", "Upload one document and apply targeted revisions.", progress=0.33, step_note="Step 1 of 3: Upload")
@@ -1569,6 +1720,8 @@ def render_edit_workflow():
                 st.session_state.edit_filename = uploaded_file.name
                 st.session_state.edit_file_ext = ext
                 st.session_state.edit_original_file_bytes = raw_bytes if ext in [".docx", ".docm"] else None
+                st.session_state.edit_edgar_suggestions = []
+                st.session_state.edit_edgar_compare_meta = None
                 st.success(f"Loaded {uploaded_file.name} ({len(text):,} characters)")
                 st.rerun()
         return
@@ -1632,11 +1785,11 @@ def render_edit_workflow():
             st.session_state.get("edit_document_original", ""),
             st.session_state.edit_document_text,
         )
-        with st.expander(f"Exact changes (+{add_count} / -{del_count})", expanded=False):
-            st.markdown(
-                f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{diff_html}</div>",
-                unsafe_allow_html=True,
-            )
+        st.markdown(f"#### Redline Preview (+{add_count} / -{del_count})")
+        st.markdown(
+            f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{diff_html}</div>",
+            unsafe_allow_html=True,
+        )
 
         a, b, c = st.columns(3)
         with a:
@@ -1651,7 +1804,7 @@ def render_edit_workflow():
 
             if ext == ".txt":
                 st.download_button(
-                    label="Download .txt",
+                    label="Download clean final (.txt)",
                     data=st.session_state.edit_document_text.encode("utf-8"),
                     file_name=f"{base_name}_edited.txt",
                     mime="text/plain",
@@ -1670,7 +1823,7 @@ def render_edit_workflow():
                         else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     )
                     st.download_button(
-                        label=f"Download preserved {out_ext}",
+                        label=f"Download clean final (preserved {out_ext})",
                         data=preserved_bytes,
                         file_name=f"{base_name}_edited{out_ext}",
                         mime=out_mime,
@@ -1683,33 +1836,19 @@ def render_edit_workflow():
                         original_name,
                     )
                     st.download_button(
-                        label="Download .docx",
+                        label="Download clean final (.docx)",
                         data=docx_bytes,
                         file_name=f"{base_name}_edited.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         use_container_width=True,
                     )
-
-                redline_bytes = DocumentGenerator.diff_to_docx(
-                    st.session_state.get("edit_document_original", ""),
-                    st.session_state.edit_document_text,
-                    title=f"{base_name} Redline",
-                )
-                st.download_button(
-                    label="Download redline .docx",
-                    data=redline_bytes,
-                    file_name=f"{base_name}_redline.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                    key="edit_redline_download",
-                )
             else:
                 docx_bytes = DocumentGenerator.text_to_docx(
                     st.session_state.edit_document_text,
                     original_name
                 )
                 st.download_button(
-                    label="Download .docx",
+                    label="Download clean final (.docx)",
                     data=docx_bytes,
                     file_name=f"{base_name}_edited.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1717,6 +1856,20 @@ def render_edit_workflow():
                 )
                 if ext == ".pdf":
                     st.caption("Original was PDF. Export is provided as editable DOCX.")
+
+            redline_bytes = DocumentGenerator.diff_to_docx(
+                st.session_state.get("edit_document_original", ""),
+                st.session_state.edit_document_text,
+                title=f"{base_name} Redline",
+            )
+            st.download_button(
+                label="Download redline (.docx)",
+                data=redline_bytes,
+                file_name=f"{base_name}_redline.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                key="edit_redline_download",
+            )
         with c:
             if st.button("Reset", use_container_width=True, key="edit_reset"):
                 st.session_state.pop("edit_document_text", None)
@@ -1724,6 +1877,8 @@ def render_edit_workflow():
                 st.session_state.pop("edit_chat_messages", None)
                 st.session_state.pop("edit_original_file_bytes", None)
                 st.session_state.pop("edit_document_original", None)
+                st.session_state.pop("edit_edgar_suggestions", None)
+                st.session_state.pop("edit_edgar_compare_meta", None)
                 st.rerun()
 
         if len(st.session_state.edit_document_history) > 1:
@@ -1735,13 +1890,82 @@ def render_edit_workflow():
         st.markdown("### AI Revision Assistant")
         st.caption("Use specific instructions. The assistant returns a full revised document each time.")
 
-        q1, q2 = st.columns(2)
-        with q1:
-            if st.button("Strengthen indemnity", use_container_width=True, key="edit_quick_indemnity"):
-                st.session_state.edit_chat_messages.append({"role": "user", "content": "Strengthen indemnity language and tighten risk allocation."})
-        with q2:
-            if st.button("Clarify termination", use_container_width=True, key="edit_quick_termination"):
-                st.session_state.edit_chat_messages.append({"role": "user", "content": "Clarify termination triggers and cure periods."})
+        with st.expander("Compare to SEC EDGAR", expanded=False):
+            sec_client = get_sec_client()
+            default_query = st.session_state.get("edit_filename", "")
+            if "." in default_query:
+                default_query = default_query.rsplit(".", 1)[0]
+
+            edgar_query = st.text_input(
+                "EDGAR search query",
+                value=st.session_state.get("edit_edgar_query", default_query),
+                key="edit_edgar_query",
+                help="Example: software services agreement or a public company name",
+            )
+            edgar_forms_raw = st.text_input(
+                "Form types (comma-separated, optional)",
+                value=st.session_state.get("edit_edgar_forms", "8-K,10-K,10-Q"),
+                key="edit_edgar_forms",
+            )
+            max_results = st.slider("Filings to scan", min_value=1, max_value=8, value=4, key="edit_edgar_max_results")
+            threshold = st.slider("Similarity threshold", min_value=0.20, max_value=0.90, value=0.34, step=0.01, key="edit_edgar_threshold")
+
+            if not sec_client.is_configured():
+                st.info("SEC EDGAR User-Agent is not configured. Add it in Settings to enable comparisons.")
+
+            if st.button("Run EDGAR comparison", use_container_width=True, key="edit_run_edgar_compare"):
+                if not sec_client.is_configured():
+                    st.error("Set SEC EDGAR User-Agent in Settings first.")
+                else:
+                    form_types = [f.strip().upper() for f in edgar_forms_raw.split(",") if f.strip()]
+                    llm = get_llm()
+                    with st.spinner("Comparing clauses against EDGAR filings..."):
+                        result = run_edgar_clause_compare(
+                            document_text=st.session_state.edit_document_text,
+                            sec_client=sec_client,
+                            llm=llm,
+                            query=edgar_query,
+                            form_types=form_types,
+                            max_results=max_results,
+                            similarity_floor=threshold,
+                            max_suggestions=5,
+                        )
+                    if result.get("error"):
+                        st.error(result["error"])
+                        st.session_state.edit_edgar_suggestions = []
+                        st.session_state.edit_edgar_compare_meta = None
+                    else:
+                        st.session_state.edit_edgar_suggestions = result.get("suggestions", [])
+                        st.session_state.edit_edgar_compare_meta = {
+                            "hits_considered": result.get("hits_considered", 0),
+                            "hits_used": result.get("hits_used", 0),
+                            "peer_units": result.get("peer_units", 0),
+                        }
+                        st.success(f"Generated {len(st.session_state.edit_edgar_suggestions)} cited suggestion(s).")
+
+            compare_meta = st.session_state.get("edit_edgar_compare_meta")
+            suggestions = st.session_state.get("edit_edgar_suggestions", [])
+            if compare_meta:
+                st.caption(
+                    f"Scanned {compare_meta['hits_used']}/{compare_meta['hits_considered']} filings | "
+                    f"Comparable peer clauses: {compare_meta['peer_units']}"
+                )
+
+            for i, suggestion in enumerate(suggestions):
+                src = suggestion.get("source", {})
+                with st.container(border=True):
+                    st.markdown(f"**{suggestion.get('current_title', 'Clause')}** | Similarity `{suggestion.get('similarity', 0):.3f}`")
+                    st.caption(f"Peer source: {src.get('entity_name', 'Unknown')} | {src.get('form_type', 'N/A')} | {src.get('file_date', 'N/A')}")
+                    if src.get("url"):
+                        st.markdown(f"[Open filing source]({src['url']})")
+                    st.markdown(f"**Suggested change:** {suggestion.get('suggestion_text', '')}")
+                    st.markdown("**Current excerpt**")
+                    st.code(suggestion.get("current_excerpt", ""), language="markdown")
+                    st.markdown("**Peer excerpt**")
+                    st.code(suggestion.get("peer_excerpt", ""), language="markdown")
+                    if st.button("Apply in revision chat", key=f"edit_apply_edgar_{i}", use_container_width=True):
+                        st.session_state.edit_chat_messages.append({"role": "user", "content": suggestion.get("revision_prompt", "")})
+                        st.rerun()
 
         for msg in st.session_state.edit_chat_messages:
             with st.chat_message(msg["role"]):
@@ -1806,7 +2030,8 @@ def render_create_workflow():
         for k in [
             "create_setup_complete", "create_setup_goal", "create_setup_style", "create_setup_guidance",
             "create_doc_type", "create_doc_type_label", "create_fields", "create_generated_text", "create_chat_messages",
-            "create_doc_description", "create_detection_reason", "create_doc_description_input"
+            "create_doc_description", "create_detection_reason", "create_doc_description_input",
+            "create_original_generated_text"
         ]:
             st.session_state.pop(k, None)
         st.rerun()
@@ -1994,6 +2219,7 @@ def render_create_workflow():
                                 text_out = llm.generate_document(system_prompt, user_prompt)
 
                             st.session_state.create_generated_text = text_out
+                            st.session_state.create_original_generated_text = text_out
                             st.session_state.create_chat_messages = []
                             st.rerun()
                         except Exception as e:
@@ -2011,6 +2237,9 @@ def render_create_workflow():
     </div>
     """, unsafe_allow_html=True)
 
+    if "create_original_generated_text" not in st.session_state:
+        st.session_state.create_original_generated_text = st.session_state.create_generated_text
+
     col_preview, col_ai = st.columns([3, 2], gap="large")
     with col_preview:
         st.markdown("### Draft Workspace")
@@ -2024,10 +2253,24 @@ def render_create_workflow():
         if edited_text != st.session_state.create_generated_text:
             st.session_state.create_generated_text = edited_text
 
+        create_diff_html, create_add_count, create_del_count = build_diff_highlight_html(
+            st.session_state.get("create_original_generated_text", ""),
+            st.session_state.create_generated_text,
+        )
+        st.markdown(f"#### Redline Preview (+{create_add_count} / -{create_del_count})")
+        st.markdown(
+            f"<div style='white-space:pre-wrap;border:1px solid #d7dbd7;border-radius:10px;padding:0.9rem;background:#ffffff;line-height:1.55;'>{create_diff_html}</div>",
+            unsafe_allow_html=True,
+        )
+
         a, b, c = st.columns(3)
         with a:
             if st.button("Start Over", use_container_width=True, key="create_start_over_exec"):
-                for k in ["create_doc_type", "create_fields", "create_generated_text", "create_chat_messages", "create_doc_description", "create_detection_reason", "create_doc_description_input"]:
+                for k in [
+                    "create_doc_type", "create_fields", "create_generated_text", "create_chat_messages",
+                    "create_doc_description", "create_detection_reason", "create_doc_description_input",
+                    "create_original_generated_text"
+                ]:
                     st.session_state.pop(k, None)
                 st.rerun()
         with b:
@@ -2036,11 +2279,24 @@ def render_create_workflow():
                 st.session_state.create_doc_type_label
             )
             st.download_button(
-                label="Download .docx",
+                label="Download clean final (.docx)",
                 data=docx_bytes,
                 file_name=f"{st.session_state.create_doc_type_label.replace(' ', '_')}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True
+            )
+            create_redline_bytes = DocumentGenerator.diff_to_docx(
+                st.session_state.get("create_original_generated_text", ""),
+                st.session_state.create_generated_text,
+                title=f"{st.session_state.create_doc_type_label} Redline",
+            )
+            st.download_button(
+                label="Download redline (.docx)",
+                data=create_redline_bytes,
+                file_name=f"{st.session_state.create_doc_type_label.replace(' ', '_')}_redline.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                key="create_redline_download",
             )
         with c:
             if st.button("Re-run Guidance", use_container_width=True, key="create_rerun_setup"):
@@ -2050,14 +2306,6 @@ def render_create_workflow():
     with col_ai:
         st.markdown("### AI Revision Assistant")
         st.caption("Request targeted improvements. The assistant returns a full updated draft.")
-
-        q1, q2 = st.columns(2)
-        with q1:
-            if st.button("Sharpen recitals", use_container_width=True, key="create_quick_recitals"):
-                st.session_state.create_chat_messages.append({"role": "user", "content": "Sharpen recitals and improve narrative clarity without changing legal effect."})
-        with q2:
-            if st.button("Harden remedies", use_container_width=True, key="create_quick_remedies"):
-                st.session_state.create_chat_messages.append({"role": "user", "content": "Harden remedies and default provisions while keeping the current structure."})
 
         for msg in st.session_state.get("create_chat_messages", []):
             with st.chat_message(msg["role"]):
