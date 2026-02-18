@@ -1,5 +1,5 @@
-"""
-Document Scanner — Discovers and indexes legal documents from local storage.
+﻿"""
+Document Scanner â€” Discovers and indexes legal documents from local storage.
 
 Recursively scans directories for legal documents (.pdf, .docx, .txt, .doc),
 extracts text, classifies document types using LLM, and stores in ChromaDB
@@ -43,7 +43,7 @@ class DocumentScanner:
     and stores in ChromaDB and KnowledgeDB.
     """
 
-    SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.txt', '.doc'}
+    SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.docm', '.txt', '.doc'}
     MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB limit
     CHUNK_SIZE = 2000  # Characters to send to LLM for classification
 
@@ -168,7 +168,7 @@ class DocumentScanner:
                 return self._extract_text_txt(file_path)
             elif ext == '.pdf':
                 return self._extract_text_pdf(file_path)
-            elif ext in {'.docx', '.doc'}:
+            elif ext in {'.docx', '.docm', '.doc'}:
                 return self._extract_text_docx(file_path)
             else:
                 logger.warning(f"Unsupported file type: {ext}")
@@ -536,3 +536,4 @@ Return ONLY valid JSON, no other text."""
             logger.info(f"Created learned template for {document_type} with {len(learned_fields)} fields from {total_docs} documents")
 
         logger.info("Learned templates built successfully")
+

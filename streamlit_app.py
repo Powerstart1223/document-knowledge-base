@@ -1,5 +1,5 @@
-"""
-Corporate Law Document Generator — Streamlit Application
+﻿"""
+Corporate Law Document Generator â€” Streamlit Application
 
 Features:
 - User authentication (login/registration)
@@ -59,7 +59,7 @@ from styles import get_custom_css, render_header, render_footer
 # ======================================================================
 st.set_page_config(
     page_title="Corporate Law Document Generator",
-    page_icon="⚖️",
+    page_icon="âš–ï¸",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -220,7 +220,7 @@ def get_collection():
 
 
 # ======================================================================
-# Helpers — LLM / clients
+# Helpers â€” LLM / clients
 # ======================================================================
 
 def get_llm() -> LLMBackend:
@@ -981,7 +981,7 @@ def render_onboarding_wizard():
     <div style="max-width: 700px; margin: 2rem auto;">
         <div class="card fade-in">
             <div style="text-align: center; margin-bottom: 2rem;">
-                <div style="font-size: 4rem; margin-bottom: 1rem;">🎉</div>
+                <div style="font-size: 4rem; margin-bottom: 1rem;">ðŸŽ‰</div>
                 <h1 style="margin-bottom: 0.5rem;">Welcome to Your Document Generator!</h1>
                 <p style="color: var(--text-secondary); font-size: 1.1rem;">
                     Let's get you set up in just a minute
@@ -996,7 +996,7 @@ def render_onboarding_wizard():
     with col2:
         st.markdown("""
         <div class="card fade-in">
-            <h3 style="margin-top: 0;">📋 What This App Does</h3>
+            <h3 style="margin-top: 0;">ðŸ“‹ What This App Does</h3>
             <ul style="line-height: 2; color: var(--text-secondary);">
                 <li><strong>Upload Documents:</strong> Add your legal documents to build a knowledge base</li>
                 <li><strong>Ask Questions:</strong> Chat with your documents using AI-powered search</li>
@@ -1007,7 +1007,7 @@ def render_onboarding_wizard():
 
         st.markdown("""
         <div class="card fade-in">
-            <h3 style="margin-top: 0;">🔑 Setup Your AI Provider</h3>
+            <h3 style="margin-top: 0;">ðŸ”‘ Setup Your AI Provider</h3>
             <p style="color: var(--text-secondary);">
                 This app needs an AI language model to function. Choose your preferred option:
             </p>
@@ -1017,7 +1017,7 @@ def render_onboarding_wizard():
         provider_choice = st.radio(
             "Select your AI provider:",
             options=["ollama", "openai"],
-            format_func=lambda x: "Ollama (Recommended — free, runs locally)" if x == "ollama" else "OpenAI (Cloud, requires API key)",
+            format_func=lambda x: "Ollama (Recommended â€” free, runs locally)" if x == "ollama" else "OpenAI (Cloud, requires API key)",
             index=0,
             key="onboarding_provider"
         )
@@ -1045,24 +1045,24 @@ def render_onboarding_wizard():
                 if api_key.startswith("sk-") and len(api_key) > 20:
                     st.markdown("""
                     <div class="success-card">
-                        ✅ API key format looks valid!
+                        âœ… API key format looks valid!
                     </div>
                     """, unsafe_allow_html=True)
                 else:
                     st.markdown("""
                     <div class="warning-card">
-                        ⚠️ API key format may be invalid (should start with 'sk-')
+                        âš ï¸ API key format may be invalid (should start with 'sk-')
                     </div>
                     """, unsafe_allow_html=True)
 
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
-                if st.button("💾 Save & Continue", type="primary", use_container_width=True, disabled=not api_key):
+                if st.button("ðŸ’¾ Save & Continue", type="primary", use_container_width=True, disabled=not api_key):
                     st.session_state.openai_api_key = api_key
                     st.session_state.llm_provider = "openai"
                     st.session_state.llm_model = "gpt-4o-mini"
                     st.session_state.onboarding_complete = True
-                    st.toast("✅ OpenAI configured successfully!", icon="✅")
+                    st.toast("âœ… OpenAI configured successfully!", icon="âœ…")
                     st.rerun()
 
             with col_btn2:
@@ -1088,17 +1088,17 @@ def render_onboarding_wizard():
                 if r.status_code == 200:
                     st.markdown("""
                     <div class="success-card">
-                        ✅ Ollama detected and running!
+                        âœ… Ollama detected and running!
                     </div>
                     """, unsafe_allow_html=True)
 
                     col_btn1, col_btn2 = st.columns(2)
                     with col_btn1:
-                        if st.button("💾 Use Ollama", type="primary", use_container_width=True):
+                        if st.button("ðŸ’¾ Use Ollama", type="primary", use_container_width=True):
                             st.session_state.llm_provider = "ollama"
                             st.session_state.llm_model = "llama3.1:8b"
                             st.session_state.onboarding_complete = True
-                            st.toast("✅ Ollama configured successfully!", icon="✅")
+                            st.toast("âœ… Ollama configured successfully!", icon="âœ…")
                             st.rerun()
                     with col_btn2:
                         if st.button("Skip for Now", use_container_width=True):
@@ -1107,7 +1107,7 @@ def render_onboarding_wizard():
                 else:
                     st.markdown("""
                     <div class="warning-card">
-                        ⚠️ Ollama not detected. Please install and start Ollama first.
+                        âš ï¸ Ollama not detected. Please install and start Ollama first.
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -1117,7 +1117,7 @@ def render_onboarding_wizard():
             except Exception:
                 st.markdown("""
                 <div class="warning-card">
-                    ⚠️ Ollama not detected. Please install and start Ollama first.
+                    âš ï¸ Ollama not detected. Please install and start Ollama first.
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -1127,14 +1127,14 @@ def render_onboarding_wizard():
 
 
 # ======================================================================
-# TAB 1 — Chat Q&A
+# TAB 1 â€” Chat Q&A
 # ======================================================================
 
 def render_chat_tab():
     """Render the chat Q&A interface."""
     st.markdown("""
     <div class="card-header">
-        💬 Chat with Your Documents
+        ðŸ’¬ Chat with Your Documents
     </div>
     """, unsafe_allow_html=True)
 
@@ -1143,7 +1143,7 @@ def render_chat_tab():
         # Better empty state with onboarding
         st.markdown("""
         <div style="max-width: 600px; margin: 3rem auto; text-align: center;">
-            <div style="font-size: 5rem; margin-bottom: 1.5rem; opacity: 0.6;">📚</div>
+            <div style="font-size: 5rem; margin-bottom: 1.5rem; opacity: 0.6;">ðŸ“š</div>
             <h3 style="color: var(--text-primary); margin-bottom: 1rem;">
                 No Documents Yet
             </h3>
@@ -1158,7 +1158,7 @@ def render_chat_tab():
         with col1:
             st.markdown("""
             <div class="card">
-                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">1️⃣</div>
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">1ï¸âƒ£</div>
                 <h4 style="text-align: center; margin-bottom: 0.5rem;">Upload</h4>
                 <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
                     Add PDF, DOCX, or TXT files using the sidebar
@@ -1168,7 +1168,7 @@ def render_chat_tab():
         with col2:
             st.markdown("""
             <div class="card">
-                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">2️⃣</div>
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">2ï¸âƒ£</div>
                 <h4 style="text-align: center; margin-bottom: 0.5rem;">Process</h4>
                 <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
                     Click "Process Documents" to index them
@@ -1178,7 +1178,7 @@ def render_chat_tab():
         with col3:
             st.markdown("""
             <div class="card">
-                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">3️⃣</div>
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">3ï¸âƒ£</div>
                 <h4 style="text-align: center; margin-bottom: 0.5rem;">Ask</h4>
                 <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
                     Ask questions and get AI-powered answers
@@ -1205,7 +1205,7 @@ def render_chat_tab():
                 response, sources = rag_query(prompt)
             st.markdown(response)
             if sources:
-                st.caption(f"📚 Sources: {', '.join(sources)}")
+                st.caption(f"ðŸ“š Sources: {', '.join(sources)}")
             full = response
             if sources:
                 full += f"\n\n*Sources: {', '.join(sources)}*"
@@ -1213,13 +1213,13 @@ def render_chat_tab():
 
         # Clear chat button
         if len(st.session_state.messages) > 0:
-            if st.button("🗑️ Clear Chat History"):
+            if st.button("ðŸ—‘ï¸ Clear Chat History"):
                 st.session_state.messages = []
                 st.rerun()
 
 
 # ======================================================================
-# TAB 2 — Generate Document - Workflow Functions
+# TAB 2 â€” Generate Document - Workflow Functions
 # ======================================================================
 
 def render_mimic_workflow():
@@ -1251,10 +1251,10 @@ def render_mimic_workflow():
             st.error("Document appears to be too short or unreadable. Please upload a valid document.")
             return
 
-        st.success(f"✅ Loaded {len(ref_text)} characters from {uploaded_ref.name}")
+        st.success(f"âœ… Loaded {len(ref_text)} characters from {uploaded_ref.name}")
 
         # Analyze the document
-        if st.button("🔍 Analyze Document Structure", type="primary", use_container_width=True):
+        if st.button("ðŸ” Analyze Document Structure", type="primary", use_container_width=True):
             with st.spinner("Analyzing document structure and extracting fields..."):
                 llm = get_llm()
                 collection = get_collection()
@@ -1264,7 +1264,7 @@ def render_mimic_workflow():
                 # Store in session state
                 st.session_state.mimic_analysis = analysis
                 st.session_state.mimic_ref_text = ref_text
-                st.toast("✅ Analysis complete!", icon="✅")
+                st.toast("âœ… Analysis complete!", icon="âœ…")
                 st.rerun()
 
         # Show analysis results and editable fields
@@ -1274,13 +1274,13 @@ def render_mimic_workflow():
             st.divider()
             st.markdown(f"""
             <div class="success-card">
-                <strong>📄 Document Type:</strong> {analysis.get('document_subtype', 'Unknown')}<br>
-                <strong>🎨 Tone:</strong> {analysis.get('tone', 'formal')}<br>
-                <strong>📝 Style:</strong> {analysis.get('style_notes', 'Standard legal document')}
+                <strong>ðŸ“„ Document Type:</strong> {analysis.get('document_subtype', 'Unknown')}<br>
+                <strong>ðŸŽ¨ Tone:</strong> {analysis.get('tone', 'formal')}<br>
+                <strong>ðŸ“ Style:</strong> {analysis.get('style_notes', 'Standard legal document')}
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown("### ✏️ Edit Field Values")
+            st.markdown("### âœï¸ Edit Field Values")
             st.caption("Modify the extracted values below. The AI will generate a new document with your changes.")
 
             # Editable form for extracted fields
@@ -1305,7 +1305,7 @@ def render_mimic_workflow():
 
                 st.divider()
                 submitted = st.form_submit_button(
-                    "✨ Generate Document",
+                    "âœ¨ Generate Document",
                     type="primary",
                     use_container_width=True
                 )
@@ -1324,7 +1324,7 @@ def render_mimic_workflow():
                             )
                             st.session_state.generated_text = text
                             st.session_state.generated_title = f"{analysis.get('document_subtype', 'Document')} (Mimicked)"
-                            st.toast("✅ Document generated!", icon="✅")
+                            st.toast("âœ… Document generated!", icon="âœ…")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Generation failed: {e}")
@@ -1360,7 +1360,7 @@ def render_guided_workflow():
         doc_def = DOCUMENT_TYPES[doc_type]
         st.markdown(f"*{doc_def['description']}*")
 
-        if st.button("Start Building →", type="primary", use_container_width=True):
+        if st.button("Start Building â†’", type="primary", use_container_width=True):
             st.session_state.guided_step = 1
             st.session_state.guided_doc_type = doc_type
             st.session_state.guided_fields = doc_def["fields"]
@@ -1413,12 +1413,12 @@ def render_guided_workflow():
 
             with col1:
                 if current_idx > 0:
-                    if st.button("← Previous", use_container_width=True):
+                    if st.button("â† Previous", use_container_width=True):
                         st.session_state.guided_current_field -= 1
                         st.rerun()
 
             with col2:
-                next_label = "Next →" if current_idx < len(fields) - 1 else "Generate Document ✨"
+                next_label = "Next â†’" if current_idx < len(fields) - 1 else "Generate Document âœ¨"
                 if st.button(next_label, type="primary", use_container_width=True):
                     # Store answer
                     st.session_state.guided_answers[field["key"]] = answer
@@ -1441,21 +1441,21 @@ def render_guided_workflow():
                                     use_sec=False,
                                 )
                                 st.session_state.generated_text = text
-                                st.session_state.generated_title = f"{DOCUMENT_TYPES[doc_type]['label']} — Draft"
+                                st.session_state.generated_title = f"{DOCUMENT_TYPES[doc_type]['label']} â€” Draft"
 
                                 # Reset guided workflow
                                 st.session_state.guided_step = 0
                                 st.session_state.guided_answers = {}
                                 st.session_state.guided_current_field = 0
 
-                                st.toast("✅ Document generated!", icon="✅")
+                                st.toast("âœ… Document generated!", icon="âœ…")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Generation failed: {e}")
 
             # Show summary of answers so far
             if st.session_state.guided_answers:
-                with st.expander("📋 Review Your Answers"):
+                with st.expander("ðŸ“‹ Review Your Answers"):
                     for key, value in st.session_state.guided_answers.items():
                         if value:
                             st.caption(f"**{key.replace('_', ' ').title()}:** {value}")
@@ -1488,7 +1488,7 @@ def render_quick_workflow():
     # Dynamic form
     params = {}
     with st.form("quick_gen_form"):
-        st.markdown("### 📋 Document Details")
+        st.markdown("### ðŸ“‹ Document Details")
         st.caption("Fill in the information below. The AI will use these details to draft your document.")
 
         for field in doc_def["fields"]:
@@ -1522,18 +1522,18 @@ def render_quick_workflow():
                 )
 
         st.divider()
-        st.markdown("### 🔍 Optional: Enhance with External Data")
+        st.markdown("### ðŸ” Optional: Enhance with External Data")
         st.caption("Pull additional context from external databases (optional)")
 
         use_sec = st.checkbox(
-            "📊 Include SEC EDGAR data",
+            "ðŸ“Š Include SEC EDGAR data",
             help="Fetch relevant public company filings from SEC EDGAR database",
             key="quick_use_sec"
         )
 
         st.divider()
         submitted = st.form_submit_button(
-            "✨ Generate Document",
+            "âœ¨ Generate Document",
             type="primary",
             use_container_width=True,
             help="This may take 30-60 seconds depending on the document complexity"
@@ -1561,22 +1561,22 @@ def render_quick_workflow():
                 )
                 st.session_state.generated_text = text
                 st.session_state.generated_title = (
-                    f"{doc_def['label']} — {params.get('party_a', '') or params.get('entity_name', '') or params.get('case_caption', '') or params.get('re', '') or 'Draft'}"
+                    f"{doc_def['label']} â€” {params.get('party_a', '') or params.get('entity_name', '') or params.get('case_caption', '') or params.get('re', '') or 'Draft'}"
                 )
-                st.toast("✅ Document generated successfully!", icon="✅")
+                st.toast("âœ… Document generated successfully!", icon="âœ…")
             except Exception as e:
                 st.error(f"Generation failed: {e}")
 
 
 # ======================================================================
-# TAB 2 — Generate Document (Main Function)
+# TAB 2 â€” Generate Document (Main Function)
 # ======================================================================
 
 def render_generate_tab():
     """Render the document generation interface with three workflow options."""
     st.markdown("""
     <div class="card-header">
-        📝 Generate Legal Documents
+        ðŸ“ Generate Legal Documents
     </div>
     """, unsafe_allow_html=True)
 
@@ -1585,7 +1585,7 @@ def render_generate_tab():
     if not llm.is_available():
         st.markdown("""
         <div class="error-card">
-            <strong>⚠️ AI Provider Not Configured</strong><br><br>
+            <strong>âš ï¸ AI Provider Not Configured</strong><br><br>
             To generate documents, you need to configure an AI provider.<br><br>
             <strong>Quick Fix:</strong><br>
             1. Go to the <strong>Settings</strong> tab above<br>
@@ -1599,15 +1599,15 @@ def render_generate_tab():
     # Workflow selection
     st.markdown("""
     <div class="info-card" style="margin-bottom: 1.5rem;">
-        💡 <strong>Choose your workflow:</strong> Select how you'd like to generate your document below.
+        ðŸ’¡ <strong>Choose your workflow:</strong> Select how you'd like to generate your document below.
     </div>
     """, unsafe_allow_html=True)
 
     # Three workflow options as tabs
     workflow_tab1, workflow_tab2, workflow_tab3 = st.tabs([
-        "🎨 Mimic a Document",
-        "🤖 AI-Guided Builder",
-        "⚡ Quick Generate"
+        "ðŸŽ¨ Mimic a Document",
+        "ðŸ¤– AI-Guided Builder",
+        "âš¡ Quick Generate"
     ])
 
     with workflow_tab1:
@@ -1624,7 +1624,7 @@ def render_generate_tab():
         st.divider()
         st.markdown("""
         <div class="card-header">
-            📄 Preview & Edit
+            ðŸ“„ Preview & Edit
         </div>
         """, unsafe_allow_html=True)
 
@@ -1645,7 +1645,7 @@ def render_generate_tab():
         col1, col2, col3 = st.columns([2, 1, 1])
 
         with col2:
-            if st.button("🔄 Reset", use_container_width=True, help="Clear the generated document"):
+            if st.button("ðŸ”„ Reset", use_container_width=True, help="Clear the generated document"):
                 st.session_state.generated_text = ""
                 st.session_state.generated_title = ""
                 st.rerun()
@@ -1660,7 +1660,7 @@ def render_generate_tab():
                 for c in st.session_state.generated_title
             ).strip()
             st.download_button(
-                label="⬇️ Download .docx",
+                label="â¬‡ï¸ Download .docx",
                 data=docx_bytes,
                 file_name=f"{safe_name}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1670,7 +1670,7 @@ def render_generate_tab():
 
 
 # ======================================================================
-# TAB 3 — Settings
+# TAB 3 â€” Settings
 # ======================================================================
 
 def render_settings_tab():
@@ -1681,7 +1681,7 @@ def render_settings_tab():
     if is_streamlit_cloud():
         st.markdown("""
         <div class="info-card">
-            ☁️ <strong>Running on Streamlit Cloud</strong><br>
+            â˜ï¸ <strong>Running on Streamlit Cloud</strong><br>
             Use OpenAI provider (Ollama requires local installation).
             Secrets should be configured in the Streamlit Cloud dashboard.
         </div>
@@ -1689,10 +1689,10 @@ def render_settings_tab():
 
     # Create tabs for different settings sections
     settings_tab1, settings_tab2, settings_tab3, settings_tab4 = st.tabs([
-        "🤖 LLM Provider",
-        "👤 Profile",
-        "🔌 Integrations",
-        "👥 Admin" if current_user.is_admin() else "👤 Account"
+        "ðŸ¤– LLM Provider",
+        "ðŸ‘¤ Profile",
+        "ðŸ”Œ Integrations",
+        "ðŸ‘¥ Admin" if current_user.is_admin() else "ðŸ‘¤ Account"
     ])
 
     # LLM Provider Settings
@@ -1801,7 +1801,7 @@ def render_settings_tab():
     with settings_tab3:
         st.markdown("""
         <div class="card-header">
-            🔌 External Integrations
+            ðŸ”Œ External Integrations
         </div>
         """, unsafe_allow_html=True)
 
@@ -1812,7 +1812,7 @@ def render_settings_tab():
         """, unsafe_allow_html=True)
 
         # SEC EDGAR
-        st.markdown("### 📊 SEC EDGAR")
+        st.markdown("### ðŸ“Š SEC EDGAR")
         st.caption(
             "The SEC EDGAR database provides free access to company filings. "
             "Useful for corporate filings and contracts."
@@ -1824,9 +1824,9 @@ def render_settings_tab():
             help="SEC requires a User-Agent header with your name and email for API access.",
             key="settings_sec_ua",
         )
-        if st.button("💾 Save SEC EDGAR Settings", use_container_width=True):
+        if st.button("ðŸ’¾ Save SEC EDGAR Settings", use_container_width=True):
             st.session_state.sec_user_agent = sec_ua
-            st.toast("✅ SEC EDGAR settings saved!", icon="✅")
+            st.toast("âœ… SEC EDGAR settings saved!", icon="âœ…")
             st.success("SEC EDGAR settings saved successfully.")
 
     # Admin Panel or Account Info
@@ -1836,7 +1836,7 @@ def render_settings_tab():
         else:
             st.markdown("""
             <div class="info-card">
-                ℹ️ <strong>User Account</strong><br>
+                â„¹ï¸ <strong>User Account</strong><br>
                 You are logged in as a regular user. Contact an administrator for account-related requests.
             </div>
             """, unsafe_allow_html=True)
@@ -2403,7 +2403,7 @@ def render_create_workflow():
     if st.button("Back to Home", key="back_from_create"):
         st.session_state.workflow_mode = None
         for k in [
-            "create_setup_complete", "create_setup_goal", "create_setup_style", "create_setup_guidance",
+            "create_setup_complete", "create_setup_goal", "create_setup_style", "create_setup_guidance", "create_setup_style_example",
             "create_doc_type", "create_doc_type_label", "create_fields", "create_generated_text", "create_chat_messages",
             "create_doc_description", "create_detection_reason", "create_doc_description_input",
             "create_original_generated_text", "create_redline_edit_area"
@@ -2419,6 +2419,7 @@ def render_create_workflow():
     def _build_live_preview(doc_label: str, payload: dict) -> str:
         goal = _preview_value(st.session_state.get("create_setup_goal"))
         style_source = _preview_value(st.session_state.get("create_setup_style"))
+        style_example = _preview_value(st.session_state.get("create_setup_style_example"))
         guidance = _preview_value(st.session_state.get("create_setup_guidance"))
         non_empty_items = [(k, _preview_value(v)) for k, v in payload.items() if _preview_value(v)]
 
@@ -2427,6 +2428,7 @@ def render_create_workflow():
             "",
             f"Draft objective: {goal or 'Not set'}",
             f"Style source: {style_source or 'Not set'}",
+            f"Style example: {'Provided' if style_example else 'Not provided'}",
             f"Guidance mode: {guidance or 'Not set'}",
             "",
             "Key terms:"
@@ -2459,10 +2461,29 @@ def render_create_workflow():
             )
             st.session_state.create_setup_style = st.selectbox(
                 "Style source",
-                ["Learned templates first", "Standard template library", "Custom freeform"],
+                [
+                    "Learned templates first",
+                    "Standard template library",
+                    "Custom freeform",
+                    "User-provided style example"
+                ],
                 index=0,
                 key="create_setup_style_select",
                 help="Controls how much the assistant relies on known template patterns."
+            )
+            requires_style_example = st.session_state.create_setup_style == "User-provided style example"
+            style_example_help = (
+                "Paste representative language. The assistant will prioritize this style when drafting."
+                if requires_style_example
+                else "Optional. Add representative language if you want the draft tone and structure to mirror it."
+            )
+            st.session_state.create_setup_style_example = st.text_area(
+                "Style example text",
+                value=st.session_state.get("create_setup_style_example", ""),
+                placeholder="Paste a short sample clause or paragraph to emulate tone and structure.",
+                height=140,
+                key="create_setup_style_example_input",
+                help=style_example_help,
             )
             st.session_state.create_setup_guidance = st.selectbox(
                 "Guidance level",
@@ -2472,8 +2493,11 @@ def render_create_workflow():
             )
 
             if st.button("Continue to Document Type", type="secondary", use_container_width=True, key="create_setup_continue"):
-                st.session_state.create_setup_complete = True
-                st.rerun()
+                if requires_style_example and len(st.session_state.get("create_setup_style_example", "").strip()) < 40:
+                    st.warning("Please provide a longer style example so the model can follow it closely.")
+                else:
+                    st.session_state.create_setup_complete = True
+                    st.rerun()
         with right:
             st.markdown("### Live Preview")
             st.code(_build_live_preview("Document Draft", {}), language="markdown")
@@ -2535,7 +2559,8 @@ def render_create_workflow():
         st.markdown(f"""
         <div class="info-card">
             <strong>Step 3 of 3:</strong> Enter facts and watch the draft preview update live.<br>
-            <strong>Profile:</strong> {st.session_state.get('create_setup_goal')} | {st.session_state.get('create_setup_style')} | {st.session_state.get('create_setup_guidance')}
+            <strong>Profile:</strong> {st.session_state.get('create_setup_goal')} | {st.session_state.get('create_setup_style')} | {st.session_state.get('create_setup_guidance')}<br>
+            <strong>Style example:</strong> {"Provided" if st.session_state.get('create_setup_style_example', '').strip() else "Not provided"}
         </div>
         """, unsafe_allow_html=True)
 
@@ -2577,6 +2602,7 @@ def render_create_workflow():
                             generation_context = {
                                 "draft_goal": st.session_state.get("create_setup_goal", ""),
                                 "style_source": st.session_state.get("create_setup_style", ""),
+                                "style_example_text": st.session_state.get("create_setup_style_example", ""),
                                 "guidance_level": st.session_state.get("create_setup_guidance", ""),
                                 "document_description": st.session_state.get("create_doc_description", ""),
                             }
@@ -2681,6 +2707,7 @@ def render_create_workflow():
         with a:
             if st.button("Start Over", use_container_width=True, key="create_start_over_exec"):
                 for k in [
+                    "create_setup_style_example",
                     "create_doc_type", "create_fields", "create_generated_text", "create_chat_messages",
                     "create_doc_description", "create_detection_reason", "create_doc_description_input",
                     "create_original_generated_text", "create_redline_edit_area"
@@ -3045,10 +3072,10 @@ def render_knowledge_base_page():
 
     # Tabs for different sections
     kb_tab1, kb_tab2, kb_tab3, kb_tab4 = st.tabs([
-        "📖 Learned Templates",
-        "📁 Indexed Documents",
-        "⚙️ Scanner Settings",
-        "📊 Scan History"
+        "ðŸ“– Learned Templates",
+        "ðŸ“ Indexed Documents",
+        "âš™ï¸ Scanner Settings",
+        "ðŸ“Š Scan History"
     ])
 
     # Tab 1: Learned Templates
@@ -3065,7 +3092,7 @@ def render_knowledge_base_page():
                 doc_type = type_info["type"]
                 count = type_info["count"]
 
-                with st.expander(f"📄 {doc_type} — Learned from {count} documents"):
+                with st.expander(f"ðŸ“„ {doc_type} â€” Learned from {count} documents"):
                     learned = knowledge_db.get_learned_template(doc_type, user_id=scope_user_id)
 
                     if learned:
@@ -3075,9 +3102,9 @@ def render_knowledge_base_page():
                         for field in learned["fields"]:
                             confidence = field.get("confidence", 0)
                             frequency = field.get("frequency", 0)
-                            bar_color = "🟢" if confidence >= 0.7 else "🟡" if confidence >= 0.5 else "🔴"
+                            bar_color = "ðŸŸ¢" if confidence >= 0.7 else "ðŸŸ¡" if confidence >= 0.5 else "ðŸ”´"
                             st.markdown(
-                                f"{bar_color} **{field['label']}** — "
+                                f"{bar_color} **{field['label']}** â€” "
                                 f"{confidence*100:.0f}% confidence ({frequency}/{count} documents)"
                             )
 
@@ -3122,7 +3149,7 @@ def render_knowledge_base_page():
 
             st.markdown("#### Status")
             if status["is_running"]:
-                st.success("✅ Scanner is running")
+                st.success("âœ… Scanner is running")
 
                 if status.get("current_progress"):
                     prog = status["current_progress"]
@@ -3130,7 +3157,7 @@ def render_knowledge_base_page():
                     st.caption(f"Processing: {prog['file']}")
                     st.caption(f"{prog['current']} / {prog['total']} files")
             else:
-                st.warning("⚠️ Scanner is stopped")
+                st.warning("âš ï¸ Scanner is stopped")
 
             st.divider()
 
@@ -3138,7 +3165,7 @@ def render_knowledge_base_page():
             scan_paths = status.get("scan_paths", [])
             for path in scan_paths:
                 exists = os.path.exists(path)
-                icon = "✅" if exists else "❌"
+                icon = "âœ…" if exists else "âŒ"
                 st.markdown(f"{icon} `{path}`")
 
             st.divider()
@@ -3204,7 +3231,7 @@ def render_knowledge_base_page():
             st.info("No scan history yet.")
         else:
             for scan in history:
-                status_icon = "✅" if scan["status"] == "completed" else "⏳"
+                status_icon = "âœ…" if scan["status"] == "completed" else "â³"
 
                 with st.expander(f"{status_icon} Scan on {scan['scan_start'][:10]}"):
                     col_a, col_b, col_c = st.columns(3)
@@ -3345,5 +3372,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
 
 
