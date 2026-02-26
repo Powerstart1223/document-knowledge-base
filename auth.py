@@ -7,8 +7,8 @@ Features:
 - Session management via Streamlit session state
 - Role-based access (admin, user)
 - Per-user data isolation
-- Email verification (6-digit code via SMTP)
-- Domain-restricted registration (@cypressllp.com only)
+- Optional email verification (6-digit code via SMTP)
+- Configurable email-domain restrictions
 """
 
 import sqlite3
@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-ALLOWED_DOMAIN = "cypressllp.com"
+DEFAULT_ALLOWED_DOMAIN = "cypressllp.com"
 MAX_LOGIN_ATTEMPTS = 5
 LOGIN_LOCKOUT_MINUTES = 15
 MAX_VERIFICATION_ATTEMPTS = 8
@@ -78,7 +78,42 @@ class AuthManager:
     DB_PATH = Path("./users.db")
 
     def __init__(self):
+        self.allowed_email_domains = self._load_allowed_email_domains()
+        self.require_email_verification = self._load_email_verification_requirement()
+        if self.allowed_email_domains:
+            self.primary_allowed_domain = sorted(self.allowed_email_domains)[0]
+        else:
+            self.primary_allowed_domain = DEFAULT_ALLOWED_DOMAIN
         self._init_db()
+
+    def _load_email_verification_requirement(self) -> bool:
+        """Return True when email verification is required for sign-up/sign-in."""
+        value = os.getenv("REQUIRE_EMAIL_VERIFICATION", "false").strip().lower()
+        return value in {"1", "true", "yes", "on"}
+
+    def _load_allowed_email_domains(self) -> Optional[set[str]]:
+        """
+        Load allowed email domains from environment.
+        - ALLOWED_EMAIL_DOMAINS="*" or "any" means any domain is allowed.
+        - Otherwise use comma-separated domains (with or without leading "@").
+        - Falls back to legacy ALLOWED_DOMAIN, then DEFAULT_ALLOWED_DOMAIN.
+        """
+        configured = os.getenv("ALLOWED_EMAIL_DOMAINS", "").strip()
+        if configured:
+            if configured in {"*", "any", "ANY"}:
+                return None
+            parsed = {
+                domain.strip().lower().lstrip("@")
+                for domain in configured.split(",")
+                if domain.strip()
+            }
+            return parsed if parsed else {DEFAULT_ALLOWED_DOMAIN}
+
+        legacy = os.getenv("ALLOWED_DOMAIN", "").strip().lower().lstrip("@")
+        if legacy:
+            return {legacy}
+
+        return {DEFAULT_ALLOWED_DOMAIN}
 
     def _init_db(self):
         """Initialize the SQLite database with users table."""
@@ -154,11 +189,12 @@ class AuthManager:
 
     def _create_default_admin(self):
         """Create a bootstrap admin user for initial setup."""
-        admin_email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", f"admin@{ALLOWED_DOMAIN}").strip().lower()
+        admin_email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", f"admin@{self.primary_allowed_domain}").strip().lower()
         admin_password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "").strip()
 
-        if admin_email.split("@")[-1] != ALLOWED_DOMAIN:
-            admin_email = f"admin@{ALLOWED_DOMAIN}"
+        admin_domain = admin_email.split("@")[-1]
+        if self.allowed_email_domains and admin_domain not in self.allowed_email_domains:
+            admin_email = f"admin@{self.primary_allowed_domain}"
 
         generated = False
         if not admin_password:
@@ -207,13 +243,17 @@ class AuthManager:
         )
 
     def validate_email(self, email: str) -> tuple[bool, str]:
-        """Validate email format and domain restriction."""
+        """Validate email format and optional domain restriction."""
         pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         if not re.match(pattern, email):
             return False, "Invalid email format"
         domain = email.strip().lower().split("@")[-1]
-        if domain != ALLOWED_DOMAIN:
-            return False, f"Only @{ALLOWED_DOMAIN} email addresses are permitted"
+        if self.allowed_email_domains and domain not in self.allowed_email_domains:
+            allowed = sorted(self.allowed_email_domains)
+            if len(allowed) == 1:
+                return False, f"Only @{allowed[0]} email addresses are permitted"
+            allowed_text = ", ".join(f"@{value}" for value in allowed)
+            return False, f"Only these email domains are permitted: {allowed_text}"
         return True, ""
 
     def validate_password(self, password: str) -> tuple[bool, str]:
@@ -305,8 +345,9 @@ class AuthManager:
         if role not in ["admin", "user"]:
             return False, "Invalid role"
 
-        # Validate password (skip for default admin creation)
-        if not skip_verification:
+        # Validate password for all user registrations.
+        # Bootstrap admin creation may bypass this via skip_verification + admin role.
+        if not (skip_verification and role == "admin"):
             valid, msg = self.validate_password(password)
             if not valid:
                 return False, msg
@@ -331,13 +372,15 @@ class AuthManager:
         # Hash password
         password_hash = self._hash_password(password)
 
+        effective_skip_verification = skip_verification or not self.require_email_verification
+
         # Generate verification code
-        verified = 1 if skip_verification else 0
+        verified = 1 if effective_skip_verification else 0
         code = None
         expires = None
         verification_attempts = 0
         last_verification_sent = None
-        if not skip_verification:
+        if not effective_skip_verification:
             code = self._generate_verification_code()
             expires = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
             last_verification_sent = datetime.utcnow().isoformat()
@@ -365,9 +408,18 @@ class AuthManager:
             return False, f"Registration failed: {str(e)}"
 
         # Send verification email
-        if not skip_verification:
+        if not effective_skip_verification:
             ok, send_msg = self._send_verification_email(email, code, full_name)
             if not ok:
+                # Keep registration atomic: remove pending user if email delivery failed.
+                conn = sqlite3.connect(self.DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM users WHERE email = ? AND email_verified = 0",
+                    (email.lower(),),
+                )
+                conn.commit()
+                conn.close()
                 return False, send_msg
             return True, "Verification code sent to your email"
 
@@ -494,14 +546,14 @@ class AuthManager:
         if not user.is_active:
             return False, None, "Account has been deactivated. Contact administrator."
 
-        if not user.email_verified:
+        if self.require_email_verification and not user.email_verified:
             return False, None, "Email not verified. Please check your inbox for the verification code."
 
         conn = sqlite3.connect(self.DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT password_hash, failed_login_attempts, locked_until
+            SELECT password_hash, failed_login_attempts
             FROM users WHERE email = ?
             """,
             (email.lower(),)
@@ -512,14 +564,7 @@ class AuthManager:
             conn.close()
             return False, None, "Invalid email or password"
 
-        password_hash, failed_attempts, locked_until = row
-
-        if locked_until:
-            lock_time = datetime.fromisoformat(locked_until)
-            if datetime.utcnow() < lock_time:
-                remaining = int((lock_time - datetime.utcnow()).total_seconds() // 60) + 1
-                conn.close()
-                return False, None, f"Account locked due to failed attempts. Try again in {remaining} minute(s)."
+        password_hash, failed_attempts = row
 
         if self._verify_password(password, password_hash):
             cursor.execute(
@@ -531,23 +576,8 @@ class AuthManager:
             return True, user, "Login successful"
 
         failed_attempts = (failed_attempts or 0) + 1
-        if failed_attempts >= MAX_LOGIN_ATTEMPTS:
-            lock_until = (datetime.utcnow() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)).isoformat()
-            cursor.execute(
-                """
-                UPDATE users
-                SET failed_login_attempts = 0,
-                    locked_until = ?
-                WHERE email = ?
-                """,
-                (lock_until, email.lower())
-            )
-            conn.commit()
-            conn.close()
-            return False, None, "Too many failed attempts. Account locked for 15 minutes."
-
         cursor.execute(
-            "UPDATE users SET failed_login_attempts = ? WHERE email = ?",
+            "UPDATE users SET failed_login_attempts = ?, locked_until = NULL WHERE email = ?",
             (failed_attempts, email.lower())
         )
         conn.commit()

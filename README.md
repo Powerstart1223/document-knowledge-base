@@ -58,7 +58,7 @@ A RAG-powered legal document generation system with AI-assisted drafting, built 
 
 5. **Create additional users:**
    - Click "Create Account" on login screen
-   - Registration is restricted to `@cypressllp.com`
+   - Registration domain policy is controlled by `ALLOWED_EMAIL_DOMAINS` (`*` allows any domain)
    - Or use Admin panel to manage users
 
 ## Quick Start â€” Streamlit Cloud Deployment

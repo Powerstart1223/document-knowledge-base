@@ -5,7 +5,7 @@ Sigma-inspired minimal, elegant dark login design.
 """
 
 import streamlit as st
-from auth import AuthManager, init_session_state, logout, User, ALLOWED_DOMAIN
+from auth import AuthManager, init_session_state, logout, User
 
 
 _LOGIN_CSS = """
@@ -183,7 +183,7 @@ def render_login_page(auth_manager: AuthManager):
     with st.form("login_form", clear_on_submit=False):
         email = st.text_input(
             "Email",
-            placeholder=f"you@{ALLOWED_DOMAIN}",
+            placeholder="you@example.com",
             key="login_email"
         )
 
@@ -243,12 +243,6 @@ def render_registration_page(auth_manager: AuthManager):
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown(f"""
-    <div style="text-align:center; color: #4a4a4a; font-size: 0.82rem; margin-bottom: 1rem;">
-        Only <strong style="color:#d4af37;">@{ALLOWED_DOMAIN}</strong> email addresses are permitted
-    </div>
-    """, unsafe_allow_html=True)
-
     with st.form("registration_form", clear_on_submit=True):
         full_name = st.text_input(
             "Full Name",
@@ -258,7 +252,7 @@ def render_registration_page(auth_manager: AuthManager):
 
         email = st.text_input(
             "Email",
-            placeholder=f"jane.smith@{ALLOWED_DOMAIN}",
+            placeholder="jane.smith@example.com",
             key="reg_email"
         )
 
@@ -298,12 +292,13 @@ def render_registration_page(auth_manager: AuthManager):
                     email=email,
                     password=password,
                     full_name=full_name,
-                    role="user"
+                    role="user",
+                    skip_verification=True,
                 )
                 if success:
-                    st.session_state.verify_email = email.lower()
+                    st.session_state.verify_email = None
                     st.session_state.show_register = False
-                    st.success("Check your inbox for the verification code.")
+                    st.success("Account created. Sign in with your new password.")
                     st.rerun()
                 else:
                     st.error(message)
