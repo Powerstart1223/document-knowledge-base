@@ -4,8 +4,10 @@ Authentication UI components for Corporate Law Document Generator.
 Sigma-inspired minimal, elegant dark login design.
 """
 
+import os
+import time
 import streamlit as st
-from auth import AuthManager, init_session_state, logout, User
+from auth import AuthManager, init_session_state, logout, User, start_authenticated_session
 
 
 _LOGIN_CSS = """
@@ -162,10 +164,57 @@ _LOGIN_CSS = """
 </style>
 """
 
+
+def _get_login_rate_config() -> tuple[int, int, int]:
+    """Return (max_attempts, window_seconds, cooldown_seconds)."""
+    max_attempts = max(1, int(os.getenv("LOGIN_MAX_ATTEMPTS_PER_WINDOW", "6")))
+    window_seconds = max(10, int(os.getenv("LOGIN_WINDOW_SECONDS", "60")))
+    cooldown_seconds = max(10, int(os.getenv("LOGIN_COOLDOWN_SECONDS", "90")))
+    return max_attempts, window_seconds, cooldown_seconds
+
+
+def _too_many_login_attempts() -> tuple[bool, int]:
+    """Per-session login throttle to slow credential stuffing attempts."""
+    now = time.time()
+    lock_until = float(st.session_state.get("login_rate_limited_until", 0.0) or 0.0)
+    if lock_until > now:
+        return True, int(lock_until - now)
+
+    max_attempts, window_seconds, cooldown_seconds = _get_login_rate_config()
+    attempts = [
+        ts for ts in st.session_state.get("login_rate_attempts", [])
+        if isinstance(ts, (int, float)) and (now - ts) <= window_seconds
+    ]
+    st.session_state.login_rate_attempts = attempts
+
+    if len(attempts) >= max_attempts:
+        until = now + cooldown_seconds
+        st.session_state.login_rate_limited_until = until
+        st.session_state.login_rate_attempts = []
+        return True, cooldown_seconds
+
+    return False, 0
+
+
+def _record_failed_login_attempt():
+    now = time.time()
+    attempts = st.session_state.get("login_rate_attempts", [])
+    attempts.append(now)
+    st.session_state.login_rate_attempts = attempts
+
+
+def _clear_login_throttle_state():
+    st.session_state.login_rate_attempts = []
+    st.session_state.login_rate_limited_until = 0.0
+
 def render_login_page(auth_manager: AuthManager):
     """Render a clean, high-contrast login page."""
 
     st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
+
+    expired_reason = st.session_state.pop("auth_expired_reason", None)
+    if expired_reason:
+        st.warning(expired_reason)
 
     # Brand
     st.markdown("""
@@ -201,19 +250,23 @@ def render_login_page(auth_manager: AuthManager):
         )
 
         if submit:
-            if not email or not password:
+            rate_limited, wait_seconds = _too_many_login_attempts()
+            if rate_limited:
+                st.error(f"Too many login attempts. Please wait {wait_seconds}s and try again.")
+            elif not email or not password:
                 st.error("Please enter both email and password.")
             else:
                 success, user, message = auth_manager.login(email, password)
                 if success:
-                    st.session_state.authenticated = True
-                    st.session_state.current_user = user
+                    _clear_login_throttle_state()
+                    start_authenticated_session(st.session_state, user)
                     # Always land users on the primary workspace after login.
                     st.session_state.show_settings = False
                     st.session_state.show_knowledge_base = False
                     st.session_state.workflow_mode = None
                     st.rerun()
                 else:
+                    _record_failed_login_attempt()
                     st.error(message)
 
     # Divider

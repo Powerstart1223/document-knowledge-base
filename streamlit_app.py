@@ -1,5 +1,5 @@
-﻿"""
-Corporate Law Document Generator â€” Streamlit Application
+"""
+Corporate Law Document Generator — Streamlit Application
 
 Features:
 - User authentication (login/registration)
@@ -17,6 +17,7 @@ import html as html_lib
 import difflib
 import hashlib
 import tempfile
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -28,6 +29,22 @@ import logging
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_csv(name: str, default: str) -> set[str]:
+    value = os.getenv(name, default)
+    return {
+        item.strip().lower()
+        for item in value.split(",")
+        if item.strip()
+    }
 
 import chromadb
 from chromadb.utils import embedding_functions
@@ -59,7 +76,7 @@ from styles import get_custom_css, render_header, render_footer
 # ======================================================================
 st.set_page_config(
     page_title="Corporate Law Document Generator",
-    page_icon="âš–ï¸",
+    page_icon="⚖️",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -82,6 +99,73 @@ FORCE_OLLAMA_FOR_ALL_USERS = os.getenv("FORCE_OLLAMA_FOR_ALL_USERS", "false").lo
 SHARED_KNOWLEDGE_SCOPE = os.getenv("SHARED_KNOWLEDGE_SCOPE", "true").lower() == "true"
 SHARED_SCOPE_USER_ID = int(os.getenv("SHARED_SCOPE_USER_ID", "0"))
 SHARED_COLLECTION_NAME = os.getenv("SHARED_COLLECTION_NAME", "documents_shared")
+
+ENFORCE_WEB_SECURITY = _env_bool("ENFORCE_WEB_SECURITY", True)
+REQUIRE_HTTPS = _env_bool("REQUIRE_HTTPS", True)
+ALLOW_INSECURE_LOCALHOST = _env_bool("ALLOW_INSECURE_LOCALHOST", True)
+STRICT_HOST_VALIDATION = _env_bool("STRICT_HOST_VALIDATION", True)
+TRUSTED_HOSTS = _env_csv(
+    "TRUSTED_HOSTS",
+    "localhost,127.0.0.1,::1"
+)
+
+
+def _get_request_headers() -> dict[str, str]:
+    try:
+        context = getattr(st, "context", None)
+        headers = getattr(context, "headers", None)
+        if not headers:
+            return {}
+        return {str(k).lower(): str(v) for k, v in dict(headers).items()}
+    except Exception:
+        return {}
+
+
+def _extract_header_value(headers: dict[str, str], *keys: str) -> str:
+    for key in keys:
+        if key in headers and headers[key]:
+            return headers[key].split(",")[0].strip()
+    return ""
+
+
+def _normalize_host(host_value: str) -> str:
+    host = host_value.strip().lower()
+    if host.startswith("[") and "]" in host:
+        host = host[1:host.index("]")]
+    elif ":" in host:
+        host = host.split(":", 1)[0]
+    return host
+
+
+def enforce_web_access_security() -> None:
+    if not ENFORCE_WEB_SECURITY:
+        return
+
+    headers = _get_request_headers()
+    if not headers:
+        return
+
+    host_raw = _extract_header_value(headers, "x-forwarded-host", "host")
+    host = _normalize_host(host_raw)
+    proto = _extract_header_value(headers, "x-forwarded-proto", "x-scheme", "x-forwarded-protocol").lower()
+
+    if not host:
+        return
+
+    local_hosts = {"localhost", "127.0.0.1", "::1"}
+    is_local = host in local_hosts
+
+    if STRICT_HOST_VALIDATION and TRUSTED_HOSTS and host not in TRUSTED_HOSTS:
+        st.error("Access denied: untrusted host header.")
+        st.stop()
+
+    if REQUIRE_HTTPS and not (ALLOW_INSECURE_LOCALHOST and is_local):
+        if proto and proto != "https":
+            st.error("Secure HTTPS is required for web access.")
+            st.stop()
+        if not proto and not is_local:
+            st.error("Secure HTTPS is required for web access.")
+            st.stop()
 
 
 def get_default_llm_provider() -> str:
@@ -124,6 +208,7 @@ def get_config_value(key: str, default: str = "") -> str:
 # ======================================================================
 
 init_session_state(st.session_state)
+enforce_web_access_security()
 auth_manager = AuthManager()
 
 
@@ -220,7 +305,7 @@ def get_collection():
 
 
 # ======================================================================
-# Helpers â€” LLM / clients
+# Helpers — LLM / clients
 # ======================================================================
 
 def get_llm() -> LLMBackend:
@@ -295,6 +380,72 @@ def _extract_legacy_doc_text(raw_bytes: bytes) -> str:
                     os.remove(p)
                 except Exception:
                     pass
+
+
+def _extract_google_doc_id(url: str) -> str:
+    """Extract a Google Docs document id from common URL patterns."""
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+
+    host = (parsed.netloc or "").lower()
+    if host not in {"docs.google.com", "www.docs.google.com"}:
+        return ""
+
+    parts = [p for p in (parsed.path or "").split("/") if p]
+    # Expected path: /document/d/<doc_id>/...
+    if len(parts) >= 3 and parts[0] == "document" and parts[1] == "d":
+        return parts[2].strip()
+
+    return ""
+
+
+def extract_text_from_google_doc_url(url: str) -> str:
+    """
+    Fetch plain text from a shareable Google Doc URL.
+    Requires the doc to be accessible to the current request context
+    (for most local use-cases: "Anyone with the link" viewer access).
+    """
+    try:
+        doc_id = _extract_google_doc_id(url)
+        if not doc_id:
+            return (
+                "Error reading file: invalid Google Docs URL. "
+                "Use a link like https://docs.google.com/document/d/<DOC_ID>/edit"
+            )
+
+        export_url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
+
+        import requests
+        response = requests.get(
+            export_url,
+            timeout=15,
+            allow_redirects=True,
+            headers={"User-Agent": "DocumentKnowledgeBase/1.0"},
+        )
+
+        if response.status_code in {401, 403}:
+            return (
+                "Error reading file: Google Doc access denied. "
+                "Set sharing to 'Anyone with the link' (viewer) or use an accessible document."
+            )
+
+        if response.status_code >= 400:
+            return f"Error reading file: Google Docs returned HTTP {response.status_code}."
+
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        if "text/plain" not in content_type:
+            return (
+                "Error reading file: Google Docs did not return plain text. "
+                "Ensure this is a Google Doc URL and sharing is configured correctly."
+            )
+
+        text_out = (response.text or "").replace("\r\n", "\n").strip("\ufeff\n ")
+        if not text_out:
+            return "Error reading file: imported Google Doc appears empty."
+        return text_out
+    except Exception as e:
+        return f"Error reading file: {e}"
 
 
 def extract_text_from_file(uploaded_file, filename: str | None = None) -> str:
@@ -981,7 +1132,7 @@ def render_onboarding_wizard():
     <div style="max-width: 700px; margin: 2rem auto;">
         <div class="card fade-in">
             <div style="text-align: center; margin-bottom: 2rem;">
-                <div style="font-size: 4rem; margin-bottom: 1rem;">ðŸŽ‰</div>
+                <div style="font-size: 4rem; margin-bottom: 1rem;">🎉</div>
                 <h1 style="margin-bottom: 0.5rem;">Welcome to Your Document Generator!</h1>
                 <p style="color: var(--text-secondary); font-size: 1.1rem;">
                     Let's get you set up in just a minute
@@ -996,7 +1147,7 @@ def render_onboarding_wizard():
     with col2:
         st.markdown("""
         <div class="card fade-in">
-            <h3 style="margin-top: 0;">ðŸ“‹ What This App Does</h3>
+            <h3 style="margin-top: 0;">📋 What This App Does</h3>
             <ul style="line-height: 2; color: var(--text-secondary);">
                 <li><strong>Upload Documents:</strong> Add your legal documents to build a knowledge base</li>
                 <li><strong>Ask Questions:</strong> Chat with your documents using AI-powered search</li>
@@ -1007,7 +1158,7 @@ def render_onboarding_wizard():
 
         st.markdown("""
         <div class="card fade-in">
-            <h3 style="margin-top: 0;">ðŸ”‘ Setup Your AI Provider</h3>
+            <h3 style="margin-top: 0;">🔑 Setup Your AI Provider</h3>
             <p style="color: var(--text-secondary);">
                 This app needs an AI language model to function. Choose your preferred option:
             </p>
@@ -1017,7 +1168,7 @@ def render_onboarding_wizard():
         provider_choice = st.radio(
             "Select your AI provider:",
             options=["ollama", "openai"],
-            format_func=lambda x: "Ollama (Recommended â€” free, runs locally)" if x == "ollama" else "OpenAI (Cloud, requires API key)",
+            format_func=lambda x: "Ollama (Recommended — free, runs locally)" if x == "ollama" else "OpenAI (Cloud, requires API key)",
             index=0,
             key="onboarding_provider"
         )
@@ -1045,24 +1196,24 @@ def render_onboarding_wizard():
                 if api_key.startswith("sk-") and len(api_key) > 20:
                     st.markdown("""
                     <div class="success-card">
-                        âœ… API key format looks valid!
+                        ✅ API key format looks valid!
                     </div>
                     """, unsafe_allow_html=True)
                 else:
                     st.markdown("""
                     <div class="warning-card">
-                        âš ï¸ API key format may be invalid (should start with 'sk-')
+                        ⚠️ API key format may be invalid (should start with 'sk-')
                     </div>
                     """, unsafe_allow_html=True)
 
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
-                if st.button("ðŸ’¾ Save & Continue", type="primary", use_container_width=True, disabled=not api_key):
+                if st.button("💾 Save & Continue", type="primary", use_container_width=True, disabled=not api_key):
                     st.session_state.openai_api_key = api_key
                     st.session_state.llm_provider = "openai"
                     st.session_state.llm_model = "gpt-4o-mini"
                     st.session_state.onboarding_complete = True
-                    st.toast("âœ… OpenAI configured successfully!", icon="âœ…")
+                    st.toast("✅ OpenAI configured successfully!", icon="✅")
                     st.rerun()
 
             with col_btn2:
@@ -1088,17 +1239,17 @@ def render_onboarding_wizard():
                 if r.status_code == 200:
                     st.markdown("""
                     <div class="success-card">
-                        âœ… Ollama detected and running!
+                        ✅ Ollama detected and running!
                     </div>
                     """, unsafe_allow_html=True)
 
                     col_btn1, col_btn2 = st.columns(2)
                     with col_btn1:
-                        if st.button("ðŸ’¾ Use Ollama", type="primary", use_container_width=True):
+                        if st.button("💾 Use Ollama", type="primary", use_container_width=True):
                             st.session_state.llm_provider = "ollama"
                             st.session_state.llm_model = "llama3.1:8b"
                             st.session_state.onboarding_complete = True
-                            st.toast("âœ… Ollama configured successfully!", icon="âœ…")
+                            st.toast("✅ Ollama configured successfully!", icon="✅")
                             st.rerun()
                     with col_btn2:
                         if st.button("Skip for Now", use_container_width=True):
@@ -1107,7 +1258,7 @@ def render_onboarding_wizard():
                 else:
                     st.markdown("""
                     <div class="warning-card">
-                        âš ï¸ Ollama not detected. Please install and start Ollama first.
+                        ⚠️ Ollama not detected. Please install and start Ollama first.
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -1117,7 +1268,7 @@ def render_onboarding_wizard():
             except Exception:
                 st.markdown("""
                 <div class="warning-card">
-                    âš ï¸ Ollama not detected. Please install and start Ollama first.
+                    ⚠️ Ollama not detected. Please install and start Ollama first.
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -1127,14 +1278,14 @@ def render_onboarding_wizard():
 
 
 # ======================================================================
-# TAB 1 â€” Chat Q&A
+# TAB 1 — Chat Q&A
 # ======================================================================
 
 def render_chat_tab():
     """Render the chat Q&A interface."""
     st.markdown("""
     <div class="card-header">
-        ðŸ’¬ Chat with Your Documents
+        💬 Chat with Your Documents
     </div>
     """, unsafe_allow_html=True)
 
@@ -1143,7 +1294,7 @@ def render_chat_tab():
         # Better empty state with onboarding
         st.markdown("""
         <div style="max-width: 600px; margin: 3rem auto; text-align: center;">
-            <div style="font-size: 5rem; margin-bottom: 1.5rem; opacity: 0.6;">ðŸ“š</div>
+            <div style="font-size: 5rem; margin-bottom: 1.5rem; opacity: 0.6;">📚</div>
             <h3 style="color: var(--text-primary); margin-bottom: 1rem;">
                 No Documents Yet
             </h3>
@@ -1158,7 +1309,7 @@ def render_chat_tab():
         with col1:
             st.markdown("""
             <div class="card">
-                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">1ï¸âƒ£</div>
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">1️⃣</div>
                 <h4 style="text-align: center; margin-bottom: 0.5rem;">Upload</h4>
                 <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
                     Add PDF, DOCX, or TXT files using the sidebar
@@ -1168,7 +1319,7 @@ def render_chat_tab():
         with col2:
             st.markdown("""
             <div class="card">
-                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">2ï¸âƒ£</div>
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">2️⃣</div>
                 <h4 style="text-align: center; margin-bottom: 0.5rem;">Process</h4>
                 <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
                     Click "Process Documents" to index them
@@ -1178,7 +1329,7 @@ def render_chat_tab():
         with col3:
             st.markdown("""
             <div class="card">
-                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">3ï¸âƒ£</div>
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">3️⃣</div>
                 <h4 style="text-align: center; margin-bottom: 0.5rem;">Ask</h4>
                 <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
                     Ask questions and get AI-powered answers
@@ -1205,7 +1356,7 @@ def render_chat_tab():
                 response, sources = rag_query(prompt)
             st.markdown(response)
             if sources:
-                st.caption(f"ðŸ“š Sources: {', '.join(sources)}")
+                st.caption(f"📚 Sources: {', '.join(sources)}")
             full = response
             if sources:
                 full += f"\n\n*Sources: {', '.join(sources)}*"
@@ -1213,13 +1364,13 @@ def render_chat_tab():
 
         # Clear chat button
         if len(st.session_state.messages) > 0:
-            if st.button("ðŸ—‘ï¸ Clear Chat History"):
+            if st.button("🗑️ Clear Chat History"):
                 st.session_state.messages = []
                 st.rerun()
 
 
 # ======================================================================
-# TAB 2 â€” Generate Document - Workflow Functions
+# TAB 2 — Generate Document - Workflow Functions
 # ======================================================================
 
 def render_mimic_workflow():
@@ -1251,10 +1402,10 @@ def render_mimic_workflow():
             st.error("Document appears to be too short or unreadable. Please upload a valid document.")
             return
 
-        st.success(f"âœ… Loaded {len(ref_text)} characters from {uploaded_ref.name}")
+        st.success(f"✅ Loaded {len(ref_text)} characters from {uploaded_ref.name}")
 
         # Analyze the document
-        if st.button("ðŸ” Analyze Document Structure", type="primary", use_container_width=True):
+        if st.button("🔍 Analyze Document Structure", type="primary", use_container_width=True):
             with st.spinner("Analyzing document structure and extracting fields..."):
                 llm = get_llm()
                 collection = get_collection()
@@ -1264,7 +1415,7 @@ def render_mimic_workflow():
                 # Store in session state
                 st.session_state.mimic_analysis = analysis
                 st.session_state.mimic_ref_text = ref_text
-                st.toast("âœ… Analysis complete!", icon="âœ…")
+                st.toast("✅ Analysis complete!", icon="✅")
                 st.rerun()
 
         # Show analysis results and editable fields
@@ -1274,13 +1425,13 @@ def render_mimic_workflow():
             st.divider()
             st.markdown(f"""
             <div class="success-card">
-                <strong>ðŸ“„ Document Type:</strong> {analysis.get('document_subtype', 'Unknown')}<br>
-                <strong>ðŸŽ¨ Tone:</strong> {analysis.get('tone', 'formal')}<br>
-                <strong>ðŸ“ Style:</strong> {analysis.get('style_notes', 'Standard legal document')}
+                <strong>📄 Document Type:</strong> {analysis.get('document_subtype', 'Unknown')}<br>
+                <strong>🎨 Tone:</strong> {analysis.get('tone', 'formal')}<br>
+                <strong>📝 Style:</strong> {analysis.get('style_notes', 'Standard legal document')}
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown("### âœï¸ Edit Field Values")
+            st.markdown("### ✏️ Edit Field Values")
             st.caption("Modify the extracted values below. The AI will generate a new document with your changes.")
 
             # Editable form for extracted fields
@@ -1305,7 +1456,7 @@ def render_mimic_workflow():
 
                 st.divider()
                 submitted = st.form_submit_button(
-                    "âœ¨ Generate Document",
+                    "✨ Generate Document",
                     type="primary",
                     use_container_width=True
                 )
@@ -1324,7 +1475,7 @@ def render_mimic_workflow():
                             )
                             st.session_state.generated_text = text
                             st.session_state.generated_title = f"{analysis.get('document_subtype', 'Document')} (Mimicked)"
-                            st.toast("âœ… Document generated!", icon="âœ…")
+                            st.toast("✅ Document generated!", icon="✅")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Generation failed: {e}")
@@ -1360,7 +1511,7 @@ def render_guided_workflow():
         doc_def = DOCUMENT_TYPES[doc_type]
         st.markdown(f"*{doc_def['description']}*")
 
-        if st.button("Start Building â†’", type="primary", use_container_width=True):
+        if st.button("Start Building →", type="primary", use_container_width=True):
             st.session_state.guided_step = 1
             st.session_state.guided_doc_type = doc_type
             st.session_state.guided_fields = doc_def["fields"]
@@ -1413,12 +1564,12 @@ def render_guided_workflow():
 
             with col1:
                 if current_idx > 0:
-                    if st.button("â† Previous", use_container_width=True):
+                    if st.button("← Previous", use_container_width=True):
                         st.session_state.guided_current_field -= 1
                         st.rerun()
 
             with col2:
-                next_label = "Next â†’" if current_idx < len(fields) - 1 else "Generate Document âœ¨"
+                next_label = "Next →" if current_idx < len(fields) - 1 else "Generate Document ✨"
                 if st.button(next_label, type="primary", use_container_width=True):
                     # Store answer
                     st.session_state.guided_answers[field["key"]] = answer
@@ -1441,21 +1592,21 @@ def render_guided_workflow():
                                     use_sec=False,
                                 )
                                 st.session_state.generated_text = text
-                                st.session_state.generated_title = f"{DOCUMENT_TYPES[doc_type]['label']} â€” Draft"
+                                st.session_state.generated_title = f"{DOCUMENT_TYPES[doc_type]['label']} — Draft"
 
                                 # Reset guided workflow
                                 st.session_state.guided_step = 0
                                 st.session_state.guided_answers = {}
                                 st.session_state.guided_current_field = 0
 
-                                st.toast("âœ… Document generated!", icon="âœ…")
+                                st.toast("✅ Document generated!", icon="✅")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Generation failed: {e}")
 
             # Show summary of answers so far
             if st.session_state.guided_answers:
-                with st.expander("ðŸ“‹ Review Your Answers"):
+                with st.expander("📋 Review Your Answers"):
                     for key, value in st.session_state.guided_answers.items():
                         if value:
                             st.caption(f"**{key.replace('_', ' ').title()}:** {value}")
@@ -1488,7 +1639,7 @@ def render_quick_workflow():
     # Dynamic form
     params = {}
     with st.form("quick_gen_form"):
-        st.markdown("### ðŸ“‹ Document Details")
+        st.markdown("### 📋 Document Details")
         st.caption("Fill in the information below. The AI will use these details to draft your document.")
 
         for field in doc_def["fields"]:
@@ -1522,18 +1673,18 @@ def render_quick_workflow():
                 )
 
         st.divider()
-        st.markdown("### ðŸ” Optional: Enhance with External Data")
+        st.markdown("### 🔍 Optional: Enhance with External Data")
         st.caption("Pull additional context from external databases (optional)")
 
         use_sec = st.checkbox(
-            "ðŸ“Š Include SEC EDGAR data",
+            "📊 Include SEC EDGAR data",
             help="Fetch relevant public company filings from SEC EDGAR database",
             key="quick_use_sec"
         )
 
         st.divider()
         submitted = st.form_submit_button(
-            "âœ¨ Generate Document",
+            "✨ Generate Document",
             type="primary",
             use_container_width=True,
             help="This may take 30-60 seconds depending on the document complexity"
@@ -1561,22 +1712,22 @@ def render_quick_workflow():
                 )
                 st.session_state.generated_text = text
                 st.session_state.generated_title = (
-                    f"{doc_def['label']} â€” {params.get('party_a', '') or params.get('entity_name', '') or params.get('case_caption', '') or params.get('re', '') or 'Draft'}"
+                    f"{doc_def['label']} — {params.get('party_a', '') or params.get('entity_name', '') or params.get('case_caption', '') or params.get('re', '') or 'Draft'}"
                 )
-                st.toast("âœ… Document generated successfully!", icon="âœ…")
+                st.toast("✅ Document generated successfully!", icon="✅")
             except Exception as e:
                 st.error(f"Generation failed: {e}")
 
 
 # ======================================================================
-# TAB 2 â€” Generate Document (Main Function)
+# TAB 2 — Generate Document (Main Function)
 # ======================================================================
 
 def render_generate_tab():
     """Render the document generation interface with three workflow options."""
     st.markdown("""
     <div class="card-header">
-        ðŸ“ Generate Legal Documents
+        📝 Generate Legal Documents
     </div>
     """, unsafe_allow_html=True)
 
@@ -1585,7 +1736,7 @@ def render_generate_tab():
     if not llm.is_available():
         st.markdown("""
         <div class="error-card">
-            <strong>âš ï¸ AI Provider Not Configured</strong><br><br>
+            <strong>⚠️ AI Provider Not Configured</strong><br><br>
             To generate documents, you need to configure an AI provider.<br><br>
             <strong>Quick Fix:</strong><br>
             1. Go to the <strong>Settings</strong> tab above<br>
@@ -1599,15 +1750,15 @@ def render_generate_tab():
     # Workflow selection
     st.markdown("""
     <div class="info-card" style="margin-bottom: 1.5rem;">
-        ðŸ’¡ <strong>Choose your workflow:</strong> Select how you'd like to generate your document below.
+        💡 <strong>Choose your workflow:</strong> Select how you'd like to generate your document below.
     </div>
     """, unsafe_allow_html=True)
 
     # Three workflow options as tabs
     workflow_tab1, workflow_tab2, workflow_tab3 = st.tabs([
-        "ðŸŽ¨ Mimic a Document",
-        "ðŸ¤– AI-Guided Builder",
-        "âš¡ Quick Generate"
+        "🎨 Mimic a Document",
+        "🤖 AI-Guided Builder",
+        "⚡ Quick Generate"
     ])
 
     with workflow_tab1:
@@ -1624,7 +1775,7 @@ def render_generate_tab():
         st.divider()
         st.markdown("""
         <div class="card-header">
-            ðŸ“„ Preview & Edit
+            📄 Preview & Edit
         </div>
         """, unsafe_allow_html=True)
 
@@ -1645,7 +1796,7 @@ def render_generate_tab():
         col1, col2, col3 = st.columns([2, 1, 1])
 
         with col2:
-            if st.button("ðŸ”„ Reset", use_container_width=True, help="Clear the generated document"):
+            if st.button("🔄 Reset", use_container_width=True, help="Clear the generated document"):
                 st.session_state.generated_text = ""
                 st.session_state.generated_title = ""
                 st.rerun()
@@ -1660,7 +1811,7 @@ def render_generate_tab():
                 for c in st.session_state.generated_title
             ).strip()
             st.download_button(
-                label="â¬‡ï¸ Download .docx",
+                label="⬇️ Download .docx",
                 data=docx_bytes,
                 file_name=f"{safe_name}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1670,7 +1821,7 @@ def render_generate_tab():
 
 
 # ======================================================================
-# TAB 3 â€” Settings
+# TAB 3 — Settings
 # ======================================================================
 
 def render_settings_tab():
@@ -1681,7 +1832,7 @@ def render_settings_tab():
     if is_streamlit_cloud():
         st.markdown("""
         <div class="info-card">
-            â˜ï¸ <strong>Running on Streamlit Cloud</strong><br>
+            ☁️ <strong>Running on Streamlit Cloud</strong><br>
             Use OpenAI provider (Ollama requires local installation).
             Secrets should be configured in the Streamlit Cloud dashboard.
         </div>
@@ -1689,10 +1840,10 @@ def render_settings_tab():
 
     # Create tabs for different settings sections
     settings_tab1, settings_tab2, settings_tab3, settings_tab4 = st.tabs([
-        "ðŸ¤– LLM Provider",
-        "ðŸ‘¤ Profile",
-        "ðŸ”Œ Integrations",
-        "ðŸ‘¥ Admin" if current_user.is_admin() else "ðŸ‘¤ Account"
+        "🤖 LLM Provider",
+        "👤 Profile",
+        "🔌 Integrations",
+        "👥 Admin" if current_user.is_admin() else "👤 Account"
     ])
 
     # LLM Provider Settings
@@ -1801,7 +1952,7 @@ def render_settings_tab():
     with settings_tab3:
         st.markdown("""
         <div class="card-header">
-            ðŸ”Œ External Integrations
+            🔌 External Integrations
         </div>
         """, unsafe_allow_html=True)
 
@@ -1812,7 +1963,7 @@ def render_settings_tab():
         """, unsafe_allow_html=True)
 
         # SEC EDGAR
-        st.markdown("### ðŸ“Š SEC EDGAR")
+        st.markdown("### 📊 SEC EDGAR")
         st.caption(
             "The SEC EDGAR database provides free access to company filings. "
             "Useful for corporate filings and contracts."
@@ -1824,9 +1975,9 @@ def render_settings_tab():
             help="SEC requires a User-Agent header with your name and email for API access.",
             key="settings_sec_ua",
         )
-        if st.button("ðŸ’¾ Save SEC EDGAR Settings", use_container_width=True):
+        if st.button("💾 Save SEC EDGAR Settings", use_container_width=True):
             st.session_state.sec_user_agent = sec_ua
-            st.toast("âœ… SEC EDGAR settings saved!", icon="âœ…")
+            st.toast("✅ SEC EDGAR settings saved!", icon="✅")
             st.success("SEC EDGAR settings saved successfully.")
 
     # Admin Panel or Account Info
@@ -1836,7 +1987,7 @@ def render_settings_tab():
         else:
             st.markdown("""
             <div class="info-card">
-                â„¹ï¸ <strong>User Account</strong><br>
+                ℹ️ <strong>User Account</strong><br>
                 You are logged in as a regular user. Contact an administrator for account-related requests.
             </div>
             """, unsafe_allow_html=True)
@@ -1943,7 +2094,7 @@ def render_edit_workflow():
         render_workflow_header("Edit Existing Document", "Upload one document and apply targeted revisions.", progress=0.33, step_note="Step 1 of 3: Upload")
         st.markdown("""
         <div class="info-card">
-            Upload one document to begin. The assistant maintains full-document continuity for each revision.
+            Upload one document or paste a Google Docs URL to begin. The assistant maintains full-document continuity for each revision.
         </div>
         """, unsafe_allow_html=True)
 
@@ -1953,6 +2104,24 @@ def render_edit_workflow():
             key="edit_upload",
             help="Supported: PDF, DOC, DOCX, DOCM, TXT"
         )
+
+        st.markdown("#### Or import from Google Docs")
+        google_doc_url = st.text_input(
+            "Google Doc URL",
+            placeholder="https://docs.google.com/document/d/<DOC_ID>/edit",
+            key="edit_google_doc_url",
+            help="The Google Doc should be accessible to import (for local testing, use 'Anyone with the link').",
+        )
+        import_google_doc = st.button(
+            "Import Google Doc",
+            key="edit_import_google_doc",
+            use_container_width=True,
+        )
+
+        loaded_text = None
+        loaded_name = None
+        loaded_ext = ".txt"
+        loaded_original_bytes = None
 
         if uploaded_file:
             raw_bytes = uploaded_file.getvalue()
@@ -1965,26 +2134,49 @@ def render_edit_workflow():
                 st.error("Document appears too short or unreadable. Upload a valid file.")
             else:
                 ext = ("." + uploaded_file.name.split(".")[-1].lower()) if "." in uploaded_file.name else ".txt"
-                st.session_state.edit_document_text = text
-                st.session_state.edit_document_original = text
-                st.session_state.edit_document_history = [{"version": 0, "text": text, "change": "Original document"}]
-                st.session_state.edit_chat_messages = []
-                st.session_state.edit_filename = uploaded_file.name
-                st.session_state.edit_file_ext = ext
-                st.session_state.edit_original_file_bytes = raw_bytes if ext in [".docx", ".docm"] else None
-                st.session_state.edit_edgar_suggestions = []
-                st.session_state.edit_edgar_compare_meta = None
-                st.session_state.edit_edgar_documents = []
-                st.session_state.edit_edgar_active_doc_index = 0
-                st.session_state.edit_edgar_search_results = []
-                st.session_state.edit_redline_edit_area = build_diff_edit_markup(text, text)[0]
-                st.session_state.edit_redline_source_text = text
-                st.session_state.edit_preview_redline_area = st.session_state.edit_redline_edit_area
-                st.session_state.edit_ai_proposal_text = None
-                st.session_state.edit_ai_proposal_base = ""
-                st.session_state.edit_ai_proposal_note = ""
-                st.success(f"Loaded {uploaded_file.name} ({len(text):,} characters)")
-                st.rerun()
+                loaded_text = text
+                loaded_name = uploaded_file.name
+                loaded_ext = ext
+                loaded_original_bytes = raw_bytes if ext in [".docx", ".docm"] else None
+
+        if import_google_doc:
+            if not google_doc_url.strip():
+                st.error("Enter a Google Docs URL to import.")
+            else:
+                with st.spinner("Importing Google Doc..."):
+                    text = extract_text_from_google_doc_url(google_doc_url.strip())
+                if text.startswith("Error reading file:"):
+                    st.error(text)
+                elif len(text) < 50:
+                    st.error("Imported Google Doc appears too short or unreadable.")
+                else:
+                    doc_id = _extract_google_doc_id(google_doc_url.strip())
+                    loaded_text = text
+                    loaded_name = f"google-doc-{doc_id}.txt" if doc_id else "google-doc.txt"
+                    loaded_ext = ".txt"
+                    loaded_original_bytes = None
+
+        if loaded_text:
+            st.session_state.edit_document_text = loaded_text
+            st.session_state.edit_document_original = loaded_text
+            st.session_state.edit_document_history = [{"version": 0, "text": loaded_text, "change": "Original document"}]
+            st.session_state.edit_chat_messages = []
+            st.session_state.edit_filename = loaded_name or "Imported document"
+            st.session_state.edit_file_ext = loaded_ext
+            st.session_state.edit_original_file_bytes = loaded_original_bytes
+            st.session_state.edit_edgar_suggestions = []
+            st.session_state.edit_edgar_compare_meta = None
+            st.session_state.edit_edgar_documents = []
+            st.session_state.edit_edgar_active_doc_index = 0
+            st.session_state.edit_edgar_search_results = []
+            st.session_state.edit_redline_edit_area = build_diff_edit_markup(loaded_text, loaded_text)[0]
+            st.session_state.edit_redline_source_text = loaded_text
+            st.session_state.edit_preview_redline_area = st.session_state.edit_redline_edit_area
+            st.session_state.edit_ai_proposal_text = None
+            st.session_state.edit_ai_proposal_base = ""
+            st.session_state.edit_ai_proposal_note = ""
+            st.success(f"Loaded {st.session_state.edit_filename} ({len(loaded_text):,} characters)")
+            st.rerun()
         return
 
     render_workflow_header("Edit Existing Document", "Refine your working draft and apply AI revisions.", progress=0.66, step_note="Step 2 of 3: Objective and revisions")
@@ -2403,7 +2595,7 @@ def render_create_workflow():
     if st.button("Back to Home", key="back_from_create"):
         st.session_state.workflow_mode = None
         for k in [
-            "create_setup_complete", "create_setup_goal", "create_setup_style", "create_setup_guidance", "create_setup_style_example",
+            "create_setup_complete", "create_setup_goal", "create_setup_style", "create_setup_guidance", "create_setup_style_example", "create_setup_style_doc_id", "create_setup_style_doc_name",
             "create_doc_type", "create_doc_type_label", "create_fields", "create_generated_text", "create_chat_messages",
             "create_doc_description", "create_detection_reason", "create_doc_description_input",
             "create_original_generated_text", "create_redline_edit_area"
@@ -2560,7 +2752,7 @@ def render_create_workflow():
         <div class="info-card">
             <strong>Step 3 of 3:</strong> Enter facts and watch the draft preview update live.<br>
             <strong>Profile:</strong> {st.session_state.get('create_setup_goal')} | {st.session_state.get('create_setup_style')} | {st.session_state.get('create_setup_guidance')}<br>
-            <strong>Style example:</strong> {"Provided" if st.session_state.get('create_setup_style_example', '').strip() else "Not provided"}
+            <strong>Style example:</strong> {"Provided" if st.session_state.get('create_setup_style_example', '').strip() else "Not provided"}<br>`r`n            <strong>Style document:</strong> {st.session_state.get('create_setup_style_doc_name', "") or "Not selected"}
         </div>
         """, unsafe_allow_html=True)
 
@@ -2829,20 +3021,17 @@ def render_create_workflow():
 # ======================================================================
 
 def render_learn_workflow():
-    """Learn from uploaded documents to improve future generation quality."""
+    """Learn from uploaded documents and maintain a personal style library."""
 
     if st.button("Back to Home", key="back_from_learn"):
         st.session_state.workflow_mode = None
         st.rerun()
 
-    render_workflow_header("Learn from a Document", "Upload reference examples to improve retrieval and drafting relevance.", progress=1.0, step_note="Single step: Upload and index")
-
-    uploaded_files = st.file_uploader(
-        "Upload one or more documents",
-        type=["pdf", "docx", "txt"],
-        accept_multiple_files=True,
-        key="learn_upload_docs",
-        help="These files will be indexed for retrieval and style matching.",
+    render_workflow_header(
+        "Learn from a Document",
+        "Upload reference examples, index them, and keep a personal style library for drafting/editing.",
+        progress=1.0,
+        step_note="Single step: Upload, index, and review style sources",
     )
 
     doc_type = st.selectbox(
@@ -2852,21 +3041,76 @@ def render_learn_workflow():
         key="learn_doc_type",
     )
 
+    uploaded_files = st.file_uploader(
+        "Upload one or more style documents",
+        type=["pdf", "doc", "docx", "docm", "txt"],
+        accept_multiple_files=True,
+        key="learn_upload_docs",
+        help="These files are saved to your personal style library and can also be indexed for retrieval.",
+    )
+
+    index_for_retrieval = st.checkbox(
+        "Also index these files for retrieval",
+        value=True,
+        key="learn_index_for_retrieval",
+        help="Keeps these documents searchable in document generation and Q&A retrieval.",
+    )
+
     if uploaded_files:
-        st.caption(f"Ready to index: {len(uploaded_files)} file(s) under category '{doc_type}'.")
+        st.caption(f"Ready to process: {len(uploaded_files)} file(s) under '{doc_type}'.")
     else:
-        st.caption("Upload one or more files to enable indexing.")
+        st.caption("Upload one or more files to add personal style sources.")
 
-    if SHARED_KNOWLEDGE_SCOPE:
-        st.caption("Shared mode: these uploads improve retrieval/templates for all users on this host.")
-
-    if uploaded_files and st.button("Learn from Uploaded Documents", type="primary", use_container_width=True, key="learn_process_btn"):
-        with st.spinner("Indexing uploaded documents..."):
-            summary = process_uploaded_files(uploaded_files, document_type=doc_type)
-        st.success("Learning completed. These documents are now available for retrieval.")
+    if uploaded_files and st.button("Save to Personal Style Library", type="primary", use_container_width=True, key="learn_process_btn"):
+        with st.spinner("Saving style documents..."):
+            summary = save_style_library_documents(
+                uploaded_files,
+                document_type=doc_type,
+                index_for_retrieval=index_for_retrieval,
+            )
+        st.success("Personal style library updated.")
         st.caption(
-            f"Indexed: {summary['new_files']} | Chunks: {summary['total_chunks']} | "
-            f"Skipped duplicates: {summary['skipped_files']} | Failed: {summary['failed_files']}"
+            f"Saved: {summary['saved']} | Failed: {summary['failed']}"
+        )
+        if index_for_retrieval:
+            idx = summary.get("indexed", {})
+            st.caption(
+                f"Indexed: {idx.get('new_files', 0)} | Chunks: {idx.get('total_chunks', 0)} | "
+                f"Skipped duplicates: {idx.get('skipped_files', 0)} | Failed: {idx.get('failed_files', 0)}"
+            )
+        st.rerun()
+
+    st.divider()
+    st.markdown("### Personal Style Library")
+    style_docs = get_personal_style_documents()
+    if not style_docs:
+        st.info("No personal style documents yet. Upload documents above to build your style library.")
+        return
+
+    selected_style_id = st.selectbox(
+        "Saved style documents",
+        options=[doc["id"] for doc in style_docs],
+        format_func=lambda doc_id: next(
+            (
+                f"{d['name']} | {d.get('document_type', 'reference')} | {d.get('char_count', 0):,} chars"
+                for d in style_docs if d["id"] == doc_id
+            ),
+            str(doc_id),
+        ),
+        key="learn_style_doc_selector",
+    )
+
+    selected_doc = get_personal_style_document(int(selected_style_id)) if selected_style_id else None
+    if selected_doc:
+        st.caption(
+            f"Updated: {selected_doc.get('updated_at', '')}"
+        )
+        st.text_area(
+            "Style document preview",
+            value=selected_doc.get("content_text", ""),
+            height=320,
+            disabled=False,
+            key=f"learn_style_preview_{selected_style_id}",
         )
 
 
@@ -3072,10 +3316,10 @@ def render_knowledge_base_page():
 
     # Tabs for different sections
     kb_tab1, kb_tab2, kb_tab3, kb_tab4 = st.tabs([
-        "ðŸ“– Learned Templates",
-        "ðŸ“ Indexed Documents",
-        "âš™ï¸ Scanner Settings",
-        "ðŸ“Š Scan History"
+        "📖 Learned Templates",
+        "📁 Indexed Documents",
+        "⚙️ Scanner Settings",
+        "📊 Scan History"
     ])
 
     # Tab 1: Learned Templates
@@ -3092,7 +3336,7 @@ def render_knowledge_base_page():
                 doc_type = type_info["type"]
                 count = type_info["count"]
 
-                with st.expander(f"ðŸ“„ {doc_type} â€” Learned from {count} documents"):
+                with st.expander(f"📄 {doc_type} — Learned from {count} documents"):
                     learned = knowledge_db.get_learned_template(doc_type, user_id=scope_user_id)
 
                     if learned:
@@ -3102,9 +3346,9 @@ def render_knowledge_base_page():
                         for field in learned["fields"]:
                             confidence = field.get("confidence", 0)
                             frequency = field.get("frequency", 0)
-                            bar_color = "ðŸŸ¢" if confidence >= 0.7 else "ðŸŸ¡" if confidence >= 0.5 else "ðŸ”´"
+                            bar_color = "🟢" if confidence >= 0.7 else "🟡" if confidence >= 0.5 else "🔴"
                             st.markdown(
-                                f"{bar_color} **{field['label']}** â€” "
+                                f"{bar_color} **{field['label']}** — "
                                 f"{confidence*100:.0f}% confidence ({frequency}/{count} documents)"
                             )
 
@@ -3149,7 +3393,7 @@ def render_knowledge_base_page():
 
             st.markdown("#### Status")
             if status["is_running"]:
-                st.success("âœ… Scanner is running")
+                st.success("✅ Scanner is running")
 
                 if status.get("current_progress"):
                     prog = status["current_progress"]
@@ -3157,7 +3401,7 @@ def render_knowledge_base_page():
                     st.caption(f"Processing: {prog['file']}")
                     st.caption(f"{prog['current']} / {prog['total']} files")
             else:
-                st.warning("âš ï¸ Scanner is stopped")
+                st.warning("⚠️ Scanner is stopped")
 
             st.divider()
 
@@ -3165,7 +3409,7 @@ def render_knowledge_base_page():
             scan_paths = status.get("scan_paths", [])
             for path in scan_paths:
                 exists = os.path.exists(path)
-                icon = "âœ…" if exists else "âŒ"
+                icon = "✅" if exists else "❌"
                 st.markdown(f"{icon} `{path}`")
 
             st.divider()
@@ -3231,7 +3475,7 @@ def render_knowledge_base_page():
             st.info("No scan history yet.")
         else:
             for scan in history:
-                status_icon = "âœ…" if scan["status"] == "completed" else "â³"
+                status_icon = "✅" if scan["status"] == "completed" else "⏳"
 
                 with st.expander(f"{status_icon} Scan on {scan['scan_start'][:10]}"):
                     col_a, col_b, col_c = st.columns(3)
@@ -3372,6 +3616,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
 

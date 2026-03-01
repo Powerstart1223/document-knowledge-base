@@ -18,6 +18,7 @@ import os
 import secrets
 import smtplib
 import logging
+
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
@@ -25,8 +26,6 @@ from pathlib import Path
 from typing import Optional
 
 DEFAULT_ALLOWED_DOMAIN = "cypressllp.com"
-MAX_LOGIN_ATTEMPTS = 5
-LOGIN_LOCKOUT_MINUTES = 15
 MAX_VERIFICATION_ATTEMPTS = 8
 VERIFICATION_RESEND_COOLDOWN_SECONDS = 60
 
@@ -766,6 +765,16 @@ class AuthManager:
         return True, "Password changed successfully"
 
 
+def start_authenticated_session(st_session_state, user: User):
+    """Persist a successful authentication with session security metadata."""
+    now = datetime.utcnow().isoformat()
+    st_session_state.authenticated = True
+    st_session_state.current_user = user
+    st_session_state.authenticated_at = now
+    st_session_state.last_activity_at = now
+    st_session_state.auth_expired_reason = None
+
+
 def init_session_state(st_session_state):
     """Initialize authentication-related session state variables."""
     if "authenticated" not in st_session_state:
@@ -776,11 +785,57 @@ def init_session_state(st_session_state):
         st_session_state.show_register = False
     if "verify_email" not in st_session_state:
         st_session_state.verify_email = None
+    if "authenticated_at" not in st_session_state:
+        st_session_state.authenticated_at = None
+    if "last_activity_at" not in st_session_state:
+        st_session_state.last_activity_at = None
+    if "auth_expired_reason" not in st_session_state:
+        st_session_state.auth_expired_reason = None
+    if "login_rate_attempts" not in st_session_state:
+        st_session_state.login_rate_attempts = []
+    if "login_rate_limited_until" not in st_session_state:
+        st_session_state.login_rate_limited_until = 0.0
 
 
 def require_auth(st_session_state) -> bool:
-    """Check if user is authenticated. Returns True if authenticated."""
-    return st_session_state.get("authenticated", False)
+    """Check if user is authenticated and session has not expired."""
+    if not st_session_state.get("authenticated", False):
+        return False
+
+    now = datetime.utcnow()
+    idle_minutes = max(1, int(os.getenv("SESSION_IDLE_TIMEOUT_MINUTES", "15")))
+    absolute_hours = max(1, int(os.getenv("SESSION_ABSOLUTE_TIMEOUT_HOURS", "8")))
+
+    authenticated_at = st_session_state.get("authenticated_at")
+    last_activity_at = st_session_state.get("last_activity_at")
+
+    if not authenticated_at or not last_activity_at:
+        stamp = now.isoformat()
+        st_session_state.authenticated_at = stamp
+        st_session_state.last_activity_at = stamp
+        return True
+
+    try:
+        auth_time = datetime.fromisoformat(authenticated_at)
+        last_activity = datetime.fromisoformat(last_activity_at)
+    except ValueError:
+        stamp = now.isoformat()
+        st_session_state.authenticated_at = stamp
+        st_session_state.last_activity_at = stamp
+        return True
+
+    if (now - auth_time) > timedelta(hours=absolute_hours):
+        st_session_state.auth_expired_reason = "Your session expired for security reasons. Please sign in again."
+        logout(st_session_state)
+        return False
+
+    if (now - last_activity) > timedelta(minutes=idle_minutes):
+        st_session_state.auth_expired_reason = "You were signed out after inactivity. Please sign in again."
+        logout(st_session_state)
+        return False
+
+    st_session_state.last_activity_at = now.isoformat()
+    return True
 
 
 def require_admin(st_session_state) -> bool:
@@ -795,6 +850,8 @@ def logout(st_session_state):
     """Log out the current user."""
     st_session_state.authenticated = False
     st_session_state.current_user = None
+    st_session_state.authenticated_at = None
+    st_session_state.last_activity_at = None
     # Clear user-specific data
     if "messages" in st_session_state:
         st_session_state.messages = []

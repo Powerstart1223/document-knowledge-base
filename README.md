@@ -71,6 +71,24 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed instructions.
 3. Add your OpenAI API key in Streamlit Cloud Secrets
 4. Your app is live!
 
+## Security Baseline
+
+For production web access, enforce these defaults:
+
+- `ENFORCE_WEB_SECURITY=true`
+- `REQUIRE_HTTPS=true`
+- `STRICT_HOST_VALIDATION=true`
+- `TRUSTED_HOSTS=your-app-domain.com`
+- `SESSION_IDLE_TIMEOUT_MINUTES=15`
+- `SESSION_ABSOLUTE_TIMEOUT_HOURS=8`
+- `LOGIN_MAX_ATTEMPTS_PER_WINDOW=6`
+- `LOGIN_WINDOW_SECONDS=60`
+- `LOGIN_COOLDOWN_SECONDS=90`
+
+Notes:
+- Keep `ALLOW_INSECURE_LOCALHOST=true` only for local development.
+- In production, terminate TLS at your reverse proxy/load balancer and forward `X-Forwarded-Proto=https`.
+
 ## Document Generation
 
 Generate professional legal documents using AI:
