@@ -55,7 +55,7 @@ DOCUMENT_TYPES: dict[str, dict] = {
             "Use formal legal language with numbered sections and sub-sections. "
             "Include standard boilerplate clauses (entire agreement, severability, "
             "notices, counterparts) unless the user specifies otherwise. "
-            "Do NOT provide legal advice — this is a draft for attorney review."
+            "Do NOT provide legal advice Ã¢â‚¬â€ this is a draft for attorney review."
         ),
     },
     "memo": {
@@ -78,7 +78,7 @@ DOCUMENT_TYPES: dict[str, dict] = {
             "Follow the standard memo format: Header block (TO/FROM/DATE/RE), "
             "Questions Presented, Brief Answer, Discussion, Conclusion. "
             "Cite relevant legal principles where appropriate. "
-            "Do NOT provide legal advice — this is a draft for attorney review."
+            "Do NOT provide legal advice Ã¢â‚¬â€ this is a draft for attorney review."
         ),
     },
     "brief": {
@@ -104,7 +104,7 @@ DOCUMENT_TYPES: dict[str, dict] = {
             "Follow standard brief format: Caption, Introduction, Statement of Facts, "
             "Argument (with numbered points and sub-points), Conclusion, Signature Block. "
             "Use formal legal writing style with proper citations (Bluebook format). "
-            "Do NOT provide legal advice — this is a draft for attorney review."
+            "Do NOT provide legal advice Ã¢â‚¬â€ this is a draft for attorney review."
         ),
     },
     "filing": {
@@ -125,7 +125,7 @@ DOCUMENT_TYPES: dict[str, dict] = {
             "Generate a professional corporate filing document. "
             "Use the correct format for the specified filing type and jurisdiction. "
             "Include all required statutory sections and language. "
-            "Do NOT provide legal advice — this is a draft for attorney review."
+            "Do NOT provide legal advice Ã¢â‚¬â€ this is a draft for attorney review."
         ),
     },
 }
@@ -643,7 +643,7 @@ Return ONLY the JSON array, no other text."""
         """Optionally pull reference data from SEC EDGAR."""
         parts: list[str] = []
 
-        # SEC EDGAR — useful for filings & contracts mentioning public companies
+        # SEC EDGAR Ã¢â‚¬â€ useful for filings & contracts mentioning public companies
         if sec_client and sec_client.is_configured():
             try:
                 cik = params.get("sec_cik", "").strip()
@@ -692,13 +692,33 @@ Return ONLY the JSON array, no other text."""
 
         # -- Build user prompt -------------------------------------------
         sections: list[str] = []
-
-        # Style examples
         if style_examples:
             examples_text = "\n---\n".join(style_examples[:3])
             sections.append(
-                "STYLE REFERENCE — follow the tone, structure, and formatting "
+                "STYLE REFERENCE - follow the tone, structure, and formatting "
                 "of these example excerpts:\n\n" + examples_text
+            )
+
+        # Explicit style reference provided by user
+        style_reference_text = str(params.get("style_reference_excerpt", "") or "").strip()
+        style_reference_name = str(params.get("style_reference_name", "") or "").strip()
+        if style_reference_text:
+            header = "USER-PROVIDED STYLE REFERENCE"
+            if style_reference_name:
+                header += f" ({style_reference_name})"
+            sections.append(
+                header + ":\n"
+                "Match tone, clause cadence, and formatting conventions from this sample while preserving the user's facts.\n\n"
+                + style_reference_text[:6000]
+            )
+
+        # Optional freeform style snippet from setup
+        style_example_text = str(params.get("style_example_text", "") or "").strip()
+        if style_example_text:
+            sections.append(
+                "USER STYLE EXAMPLE:\n"
+                "Follow this writing voice closely unless it conflicts with enforceability:\n\n"
+                + style_example_text[:3000]
             )
 
         # Reference data
@@ -776,14 +796,14 @@ Return ONLY the JSON array, no other text."""
         disclaimer = doc.add_paragraph()
         disclaimer.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = disclaimer.add_run(
-            "DRAFT — FOR ATTORNEY REVIEW ONLY — NOT LEGAL ADVICE"
+            "DRAFT Ã¢â‚¬â€ FOR ATTORNEY REVIEW ONLY Ã¢â‚¬â€ NOT LEGAL ADVICE"
         )
         run.bold = True
         run.font.size = Pt(9)
 
         doc.add_paragraph("")  # spacer
 
-        # Body text — preserve paragraphs and basic structure
+        # Body text Ã¢â‚¬â€ preserve paragraphs and basic structure
         for line in text.split("\n"):
             stripped = line.strip()
             if not stripped:
@@ -975,3 +995,6 @@ Return ONLY the JSON array, no other text."""
                         zout.writestr(item, zin.read(item.filename))
 
         return out_buf.getvalue()
+
+
+
