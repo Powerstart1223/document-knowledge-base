@@ -62,3 +62,6 @@ Thumbs.db
 finetune_venv/
 finetune_output/
 *.gguf
+
+# Multi-agent optimization artifacts
+artifacts/agent_improvement/

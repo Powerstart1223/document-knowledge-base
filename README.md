@@ -177,3 +177,35 @@ document-knowledge-base/
    - Builds structured prompts with user parameters
    - Generates professional legal documents via LLM
    - Exports to formatted .docx with proper styling
+
+## Multi-Agent Improvement
+
+Use the parallel improvement runner to continuously tune prompt and sampling
+settings against benchmarks built from both EDGAR filings and your uploaded files.
+
+```powershell
+python -m agents.multi_agent_improver --mode hybrid --iterations 6 --candidates-per-iteration 8 --candidate-workers 6 --case-workers 10 --max-cases 120
+```
+
+See `docs/multi_agent_improvement.md` for full details.
+
+## True Weight Improvement
+
+For real model weight updates (LoRA fine-tuning) plus automatic document-type expansion
+from EDGAR and uploads, run:
+
+```powershell
+python finetune/continuous_weight_improvement.py --include-uploads --include-edgar
+```
+
+See `docs/true_weight_improvement.md` for background scheduling and operational details.
+
+### UI Control Panel
+
+Admin users can run and monitor improvement jobs directly in the app:
+
+- Open `Model Improvement` from the top nav or sidebar.
+- Toggle `Strategy Agents` and `True Weight Training` jobs on/off.
+- Set EDGAR queries, learning prompts, and document-type guidance from the UI.
+
+See `docs/model_improvement_ui.md`.

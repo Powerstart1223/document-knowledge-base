@@ -51,10 +51,12 @@ python integrate_existing_model.py --provider ollama --ollama-model llama3.1:8b 
 ### Hugging Face local-folder mode
 
 ```powershell
-python integrate_existing_model.py --provider hf --model-path C:\path\to\your\local\hf-model --document-type employment_agreement
+python integrate_existing_model.py --provider hf --model-path C:\path\to\your\local\hf-model --document-type employment_agreement --top-k 50 --top-p 0.95
 ```
 
 HF `--model-path` must contain model + tokenizer artifacts (`config.json`, weights, tokenizer files).
+
+HF sampling uses sequential filters in this order: `temperature -> top-k -> top-p`.
 
 ## 4) Notes
 

@@ -1,5 +1,5 @@
 """
-Corporate Law Document Generator — Streamlit Application
+Corporate Law Document Generator ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Streamlit Application
 
 Features:
 - User authentication (login/registration)
@@ -13,10 +13,14 @@ Features:
 import os
 import io
 import re
+import sys
+import json
+import subprocess
 import html as html_lib
 import difflib
 import hashlib
 import tempfile
+from pathlib import Path
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 load_dotenv()
@@ -76,7 +80,7 @@ from styles import get_custom_css, render_header, render_footer
 # ======================================================================
 st.set_page_config(
     page_title="Corporate Law Document Generator",
-    page_icon="⚖️",
+    page_icon="ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -182,7 +186,7 @@ def get_default_llm_provider() -> str:
         pass
 
     provider = os.getenv("LLM_PROVIDER", "").lower()
-    if provider in ["ollama", "openai"]:
+    if provider in ["ollama", "openai", "hf_local"]:
         return provider
 
     if is_streamlit_cloud():
@@ -229,6 +233,8 @@ _DEFAULTS = {
     ),
     "llm_base_url": get_config_value("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
     "openai_api_key": get_config_value("OPENAI_API_KEY", ""),
+    "hf_local_model_path": get_config_value("HF_LOCAL_MODEL_PATH", ""),
+    "hf_local_max_new_tokens": get_config_value("HF_LOCAL_MAX_NEW_TOKENS", "2048"),
     "sec_user_agent": get_config_value("SEC_EDGAR_USER_AGENT", ""),
     "generated_text": "",
     "generated_title": "",
@@ -236,6 +242,7 @@ _DEFAULTS = {
     "workflow_mode": None,  # None, "create", "edit", or "learn"
     "show_settings": False,
     "show_knowledge_base": False,
+    "show_model_improvement": False,
 }
 
 for key, val in _DEFAULTS.items():
@@ -305,18 +312,57 @@ def get_collection():
 
 
 # ======================================================================
-# Helpers — LLM / clients
+# Helpers ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â LLM / clients
 # ======================================================================
 
-def get_llm() -> LLMBackend:
-    """Build an LLMBackend from current session-state settings."""
+class _UnavailableLLM:
+    def __init__(self, reason: str):
+        self.reason = reason
+
+    def is_available(self) -> bool:
+        return False
+
+    def chat(self, *args, **kwargs):
+        raise RuntimeError(self.reason)
+
+    def generate_document(self, *args, **kwargs):
+        raise RuntimeError(self.reason)
+
+
+def get_llm():
+    """Build an LLM backend from current session-state settings."""
     provider = "ollama" if FORCE_OLLAMA_FOR_ALL_USERS else st.session_state.llm_provider
+
     if provider == "ollama":
         return LLMBackend(
             provider="ollama",
             model=st.session_state.llm_model,
             base_url=st.session_state.llm_base_url,
         )
+
+    if provider == "hf_local":
+        model_path = str(st.session_state.get("hf_local_model_path", "") or "").strip()
+        if not model_path:
+            reason = "HF Local model path is empty. Set it in Settings -> LLM Provider."
+            st.session_state.hf_local_error = reason
+            return _UnavailableLLM(reason)
+
+        max_new_tokens_raw = st.session_state.get("hf_local_max_new_tokens", "2048")
+        try:
+            max_new_tokens = int(max_new_tokens_raw)
+        except Exception:
+            max_new_tokens = 2048
+
+        try:
+            from local_docgen_hf.integrate_existing_model import LocalHFBackend
+
+            st.session_state.hf_local_error = ""
+            return LocalHFBackend(model_path=model_path, default_max_tokens=max_new_tokens)
+        except Exception as exc:
+            reason = f"HF Local backend init failed: {exc}"
+            st.session_state.hf_local_error = reason
+            return _UnavailableLLM(reason)
+
     return LLMBackend(
         provider="openai",
         model=st.session_state.llm_model,
@@ -1077,6 +1123,269 @@ def get_db_stats() -> dict:
 
 
 # ======================================================================
+# Model improvement job control (UI-managed background processes)
+# ======================================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+CONTROL_DIR = PROJECT_ROOT / "artifacts" / "ui_jobs"
+CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _job_files(job_key: str) -> tuple[Path, Path, Path]:
+    safe_key = re.sub(r"[^a-zA-Z0-9_-]+", "_", job_key).lower()
+    return (
+        CONTROL_DIR / f"{safe_key}.pid",
+        CONTROL_DIR / f"{safe_key}.json",
+        CONTROL_DIR / f"{safe_key}.log",
+    )
+
+
+def _is_pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    result = subprocess.run(
+        ["tasklist", "/FI", f"PID eq {pid}"],
+        capture_output=True,
+        text=True,
+    )
+    return str(pid) in (result.stdout or "")
+
+
+def get_job_status(job_key: str) -> dict:
+    pid_file, meta_file, log_file = _job_files(job_key)
+    status = {"running": False, "pid": None, "meta": {}, "log_file": str(log_file)}
+
+    if meta_file.exists():
+        try:
+            status["meta"] = json.loads(meta_file.read_text(encoding="utf-8"))
+        except Exception:
+            status["meta"] = {}
+
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text(encoding="utf-8").strip())
+            status["pid"] = pid
+            status["running"] = _is_pid_running(pid)
+        except Exception:
+            status["running"] = False
+
+    if not status["running"] and pid_file.exists():
+        try:
+            pid_file.unlink()
+        except Exception:
+            pass
+
+    return status
+
+
+def start_job(job_key: str, command: list[str], env_overrides: dict[str, str] | None = None) -> tuple[bool, str]:
+    pid_file, meta_file, log_file = _job_files(job_key)
+    status = get_job_status(job_key)
+    if status["running"]:
+        return False, f"Job already running (PID {status['pid']})."
+
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    if env_overrides:
+        env.update({k: v for k, v in env_overrides.items() if v is not None})
+
+    creation_flags = 0
+    if hasattr(subprocess, "DETACHED_PROCESS"):
+        creation_flags |= subprocess.DETACHED_PROCESS
+    if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+        creation_flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+
+    with open(log_file, "a", encoding="utf-8") as log_handle:
+        log_handle.write(f"\n\n=== START {job_key} ===\n")
+        log_handle.write("COMMAND: " + " ".join(command) + "\n")
+        proc = subprocess.Popen(
+            command,
+            cwd=str(PROJECT_ROOT),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            env=env,
+            creationflags=creation_flags,
+        )
+
+    pid_file.write_text(str(proc.pid), encoding="utf-8")
+    meta = {
+        "started_at": __import__("datetime").datetime.now().isoformat(),
+        "command": command,
+        "env_keys": sorted(list((env_overrides or {}).keys())),
+    }
+    meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return True, f"Started {job_key} (PID {proc.pid})."
+
+
+def stop_job(job_key: str) -> tuple[bool, str]:
+    pid_file, _meta_file, _log_file = _job_files(job_key)
+    status = get_job_status(job_key)
+    pid = status.get("pid")
+    if not pid:
+        return False, "No PID found for this job."
+    if not status["running"]:
+        return False, "Job is not running."
+
+    result = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True)
+    if result.returncode == 0:
+        try:
+            pid_file.unlink()
+        except Exception:
+            pass
+        return True, f"Stopped {job_key} (PID {pid})."
+
+    return False, (result.stderr or result.stdout or "Failed to stop job").strip()
+
+
+def read_job_log(job_key: str, max_lines: int = 120) -> str:
+    _pid_file, _meta_file, log_file = _job_files(job_key)
+    if not log_file.exists():
+        return ""
+    try:
+        lines = log_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+        return "\n".join(lines[-max_lines:])
+    except Exception:
+        return ""
+
+
+def render_model_improvement_page():
+    """Admin UI to run/monitor model-improvement jobs without Task Scheduler."""
+    current_user = st.session_state.current_user
+    if not current_user.is_admin():
+        st.error("Access denied. Model improvement controls are admin-only.")
+        return
+
+    if st.button("Back to Workspace", key="back_from_model_improvement"):
+        st.session_state.show_model_improvement = False
+        st.rerun()
+
+    render_workflow_header(
+        "Model Improvement",
+        "Start/stop background jobs for strategy optimization and true weight training.",
+        step_note="You can control both jobs from this page and adjust learning preferences.",
+    )
+
+    strategy_tab, weight_tab = st.tabs(["Strategy Agents", "True Weight Training"])
+
+    with strategy_tab:
+        st.markdown("#### Strategy optimization (no weight changes)")
+        mode = st.selectbox("Data mode", ["hybrid", "edgar", "uploads"], index=0, key="mi_strategy_mode")
+        iterations = st.number_input("Iterations", min_value=1, max_value=50, value=6, key="mi_strategy_iterations")
+        candidates = st.number_input("Candidates per iteration", min_value=2, max_value=20, value=8, key="mi_strategy_candidates")
+        edgar_queries = st.text_input(
+            "EDGAR queries (comma-separated)",
+            value="material agreement,credit agreement,merger agreement,risk factors",
+            key="mi_strategy_edgar_queries",
+        )
+        base_prompt = st.text_area(
+            "Learning objective / base system prompt",
+            value="You are a legal analysis assistant. Use only provided context, cite concrete facts, and do not invent missing information.",
+            height=120,
+            key="mi_strategy_prompt",
+        )
+
+        strategy_status = get_job_status("strategy_agents")
+        st.caption(f"Status: {'Running' if strategy_status['running'] else 'Stopped'}")
+        if strategy_status["pid"]:
+            st.caption(f"PID: {strategy_status['pid']}")
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button("Start Strategy Job", type="primary", use_container_width=True, key="mi_start_strategy"):
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "agents.multi_agent_improver",
+                    "--mode",
+                    mode,
+                    "--iterations",
+                    str(int(iterations)),
+                    "--candidates-per-iteration",
+                    str(int(candidates)),
+                    "--edgar-queries",
+                    edgar_queries,
+                    "--base-system-prompt",
+                    base_prompt,
+                ]
+                ok, msg = start_job("strategy_agents", cmd, env_overrides={"SEC_EDGAR_USER_AGENT": st.session_state.get("sec_user_agent", "")})
+                if ok:
+                    st.success(msg)
+                else:
+                    st.warning(msg)
+        with c2:
+            if st.button("Stop Strategy Job", use_container_width=True, key="mi_stop_strategy"):
+                ok, msg = stop_job("strategy_agents")
+                if ok:
+                    st.success(msg)
+                else:
+                    st.warning(msg)
+        with c3:
+            if st.button("Refresh Status", use_container_width=True, key="mi_refresh_strategy"):
+                st.rerun()
+
+        strategy_log = read_job_log("strategy_agents", max_lines=120)
+        st.text_area("Strategy log (tail)", value=strategy_log, height=240, key="mi_strategy_log_area")
+
+    with weight_tab:
+        st.markdown("#### True weight improvement (LoRA fine-tuning + Ollama export)")
+        include_uploads = st.checkbox("Include uploads corpus", value=True, key="mi_weight_include_uploads")
+        include_edgar = st.checkbox("Include EDGAR corpus", value=True, key="mi_weight_include_edgar")
+        use_fallback = st.checkbox("Use fallback training settings (lower memory)", value=True, key="mi_weight_fallback")
+        edgar_queries_w = st.text_input(
+            "EDGAR queries (comma-separated)",
+            value="material agreement,credit agreement,merger agreement,employment agreement,risk factors",
+            key="mi_weight_edgar_queries",
+        )
+        doc_type_guidance = st.text_area(
+            "Document-type guidance prompt",
+            value="Prioritize corporate legal drafting templates with clear party, term, obligation, remedy, and governing-law fields.",
+            height=100,
+            key="mi_doc_type_guidance",
+        )
+
+        weight_status = get_job_status("weight_training")
+        st.caption(f"Status: {'Running' if weight_status['running'] else 'Stopped'}")
+        if weight_status["pid"]:
+            st.caption(f"PID: {weight_status['pid']}")
+
+        w1, w2, w3 = st.columns(3)
+        with w1:
+            if st.button("Start Weight Training", type="primary", use_container_width=True, key="mi_start_weight"):
+                cmd = [
+                    sys.executable,
+                    "finetune/continuous_weight_improvement.py",
+                    "--edgar-queries",
+                    edgar_queries_w,
+                    "--doc-type-guidance",
+                    doc_type_guidance,
+                ]
+                if include_uploads:
+                    cmd.append("--include-uploads")
+                if include_edgar:
+                    cmd.append("--include-edgar")
+                if use_fallback:
+                    cmd.append("--fallback")
+                ok, msg = start_job("weight_training", cmd, env_overrides={"SEC_EDGAR_USER_AGENT": st.session_state.get("sec_user_agent", "")})
+                if ok:
+                    st.success(msg)
+                else:
+                    st.warning(msg)
+        with w2:
+            if st.button("Stop Weight Training", use_container_width=True, key="mi_stop_weight"):
+                ok, msg = stop_job("weight_training")
+                if ok:
+                    st.success(msg)
+                else:
+                    st.warning(msg)
+        with w3:
+            if st.button("Refresh Status ", use_container_width=True, key="mi_refresh_weight"):
+                st.rerun()
+
+        weight_log = read_job_log("weight_training", max_lines=120)
+        st.text_area("Weight training log (tail)", value=weight_log, height=260, key="mi_weight_log_area")
+
+
+# ======================================================================
 # SIDEBAR
 # ======================================================================
 
@@ -1095,10 +1404,20 @@ def render_sidebar():
 
         if st.button("Settings", use_container_width=True, key="sidebar_settings"):
             st.session_state.show_settings = True
+            st.session_state.show_knowledge_base = False
+            st.session_state.show_model_improvement = False
             st.rerun()
 
         if st.button("Knowledge Base", use_container_width=True, key="sidebar_knowledge"):
             st.session_state.show_knowledge_base = True
+            st.session_state.show_settings = False
+            st.session_state.show_model_improvement = False
+            st.rerun()
+
+        if st.button("Model Improvement", use_container_width=True, key="sidebar_model_improvement"):
+            st.session_state.show_model_improvement = True
+            st.session_state.show_knowledge_base = False
+            st.session_state.show_settings = False
             st.rerun()
 
         st.divider()
@@ -1132,7 +1451,7 @@ def render_onboarding_wizard():
     <div style="max-width: 700px; margin: 2rem auto;">
         <div class="card fade-in">
             <div style="text-align: center; margin-bottom: 2rem;">
-                <div style="font-size: 4rem; margin-bottom: 1rem;">🎉</div>
+                <div style="font-size: 4rem; margin-bottom: 1rem;">ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â½ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°</div>
                 <h1 style="margin-bottom: 0.5rem;">Welcome to Your Document Generator!</h1>
                 <p style="color: var(--text-secondary); font-size: 1.1rem;">
                     Let's get you set up in just a minute
@@ -1147,7 +1466,7 @@ def render_onboarding_wizard():
     with col2:
         st.markdown("""
         <div class="card fade-in">
-            <h3 style="margin-top: 0;">📋 What This App Does</h3>
+            <h3 style="margin-top: 0;">ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ What This App Does</h3>
             <ul style="line-height: 2; color: var(--text-secondary);">
                 <li><strong>Upload Documents:</strong> Add your legal documents to build a knowledge base</li>
                 <li><strong>Ask Questions:</strong> Chat with your documents using AI-powered search</li>
@@ -1158,7 +1477,7 @@ def render_onboarding_wizard():
 
         st.markdown("""
         <div class="card fade-in">
-            <h3 style="margin-top: 0;">🔑 Setup Your AI Provider</h3>
+            <h3 style="margin-top: 0;">ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¹Ãƒâ€¦Ã¢â‚¬Å“ Setup Your AI Provider</h3>
             <p style="color: var(--text-secondary);">
                 This app needs an AI language model to function. Choose your preferred option:
             </p>
@@ -1168,7 +1487,7 @@ def render_onboarding_wizard():
         provider_choice = st.radio(
             "Select your AI provider:",
             options=["ollama", "openai"],
-            format_func=lambda x: "Ollama (Recommended — free, runs locally)" if x == "ollama" else "OpenAI (Cloud, requires API key)",
+            format_func=lambda x: "Ollama (Recommended ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â free, runs locally)" if x == "ollama" else "OpenAI (Cloud, requires API key)",
             index=0,
             key="onboarding_provider"
         )
@@ -1196,24 +1515,24 @@ def render_onboarding_wizard():
                 if api_key.startswith("sk-") and len(api_key) > 20:
                     st.markdown("""
                     <div class="success-card">
-                        ✅ API key format looks valid!
+                        ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ API key format looks valid!
                     </div>
                     """, unsafe_allow_html=True)
                 else:
                     st.markdown("""
                     <div class="warning-card">
-                        ⚠️ API key format may be invalid (should start with 'sk-')
+                        ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â API key format may be invalid (should start with 'sk-')
                     </div>
                     """, unsafe_allow_html=True)
 
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
-                if st.button("💾 Save & Continue", type="primary", use_container_width=True, disabled=not api_key):
+                if st.button("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¾ Save & Continue", type="primary", use_container_width=True, disabled=not api_key):
                     st.session_state.openai_api_key = api_key
                     st.session_state.llm_provider = "openai"
                     st.session_state.llm_model = "gpt-4o-mini"
                     st.session_state.onboarding_complete = True
-                    st.toast("✅ OpenAI configured successfully!", icon="✅")
+                    st.toast("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ OpenAI configured successfully!", icon="ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦")
                     st.rerun()
 
             with col_btn2:
@@ -1239,17 +1558,17 @@ def render_onboarding_wizard():
                 if r.status_code == 200:
                     st.markdown("""
                     <div class="success-card">
-                        ✅ Ollama detected and running!
+                        ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ Ollama detected and running!
                     </div>
                     """, unsafe_allow_html=True)
 
                     col_btn1, col_btn2 = st.columns(2)
                     with col_btn1:
-                        if st.button("💾 Use Ollama", type="primary", use_container_width=True):
+                        if st.button("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¾ Use Ollama", type="primary", use_container_width=True):
                             st.session_state.llm_provider = "ollama"
                             st.session_state.llm_model = "llama3.1:8b"
                             st.session_state.onboarding_complete = True
-                            st.toast("✅ Ollama configured successfully!", icon="✅")
+                            st.toast("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ Ollama configured successfully!", icon="ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦")
                             st.rerun()
                     with col_btn2:
                         if st.button("Skip for Now", use_container_width=True):
@@ -1258,7 +1577,7 @@ def render_onboarding_wizard():
                 else:
                     st.markdown("""
                     <div class="warning-card">
-                        ⚠️ Ollama not detected. Please install and start Ollama first.
+                        ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Ollama not detected. Please install and start Ollama first.
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -1268,7 +1587,7 @@ def render_onboarding_wizard():
             except Exception:
                 st.markdown("""
                 <div class="warning-card">
-                    ⚠️ Ollama not detected. Please install and start Ollama first.
+                    ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Ollama not detected. Please install and start Ollama first.
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -1278,14 +1597,14 @@ def render_onboarding_wizard():
 
 
 # ======================================================================
-# TAB 1 — Chat Q&A
+# TAB 1 ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Chat Q&A
 # ======================================================================
 
 def render_chat_tab():
     """Render the chat Q&A interface."""
     st.markdown("""
     <div class="card-header">
-        💬 Chat with Your Documents
+        ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ Chat with Your Documents
     </div>
     """, unsafe_allow_html=True)
 
@@ -1294,7 +1613,7 @@ def render_chat_tab():
         # Better empty state with onboarding
         st.markdown("""
         <div style="max-width: 600px; margin: 3rem auto; text-align: center;">
-            <div style="font-size: 5rem; margin-bottom: 1.5rem; opacity: 0.6;">📚</div>
+            <div style="font-size: 5rem; margin-bottom: 1.5rem; opacity: 0.6;">ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡</div>
             <h3 style="color: var(--text-primary); margin-bottom: 1rem;">
                 No Documents Yet
             </h3>
@@ -1309,7 +1628,7 @@ def render_chat_tab():
         with col1:
             st.markdown("""
             <div class="card">
-                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">1️⃣</div>
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">1ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£</div>
                 <h4 style="text-align: center; margin-bottom: 0.5rem;">Upload</h4>
                 <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
                     Add PDF, DOCX, or TXT files using the sidebar
@@ -1319,7 +1638,7 @@ def render_chat_tab():
         with col2:
             st.markdown("""
             <div class="card">
-                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">2️⃣</div>
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">2ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£</div>
                 <h4 style="text-align: center; margin-bottom: 0.5rem;">Process</h4>
                 <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
                     Click "Process Documents" to index them
@@ -1329,7 +1648,7 @@ def render_chat_tab():
         with col3:
             st.markdown("""
             <div class="card">
-                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">3️⃣</div>
+                <div style="font-size: 2.5rem; text-align: center; margin-bottom: 1rem;">3ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£</div>
                 <h4 style="text-align: center; margin-bottom: 0.5rem;">Ask</h4>
                 <p style="text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
                     Ask questions and get AI-powered answers
@@ -1356,7 +1675,7 @@ def render_chat_tab():
                 response, sources = rag_query(prompt)
             st.markdown(response)
             if sources:
-                st.caption(f"📚 Sources: {', '.join(sources)}")
+                st.caption(f"ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ Sources: {', '.join(sources)}")
             full = response
             if sources:
                 full += f"\n\n*Sources: {', '.join(sources)}*"
@@ -1364,13 +1683,13 @@ def render_chat_tab():
 
         # Clear chat button
         if len(st.session_state.messages) > 0:
-            if st.button("🗑️ Clear Chat History"):
+            if st.button("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¹Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Clear Chat History"):
                 st.session_state.messages = []
                 st.rerun()
 
 
 # ======================================================================
-# TAB 2 — Generate Document - Workflow Functions
+# TAB 2 ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Generate Document - Workflow Functions
 # ======================================================================
 
 def render_mimic_workflow():
@@ -1402,10 +1721,10 @@ def render_mimic_workflow():
             st.error("Document appears to be too short or unreadable. Please upload a valid document.")
             return
 
-        st.success(f"✅ Loaded {len(ref_text)} characters from {uploaded_ref.name}")
+        st.success(f"ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ Loaded {len(ref_text)} characters from {uploaded_ref.name}")
 
         # Analyze the document
-        if st.button("🔍 Analyze Document Structure", type="primary", use_container_width=True):
+        if st.button("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Analyze Document Structure", type="primary", use_container_width=True):
             with st.spinner("Analyzing document structure and extracting fields..."):
                 llm = get_llm()
                 collection = get_collection()
@@ -1415,7 +1734,7 @@ def render_mimic_workflow():
                 # Store in session state
                 st.session_state.mimic_analysis = analysis
                 st.session_state.mimic_ref_text = ref_text
-                st.toast("✅ Analysis complete!", icon="✅")
+                st.toast("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ Analysis complete!", icon="ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦")
                 st.rerun()
 
         # Show analysis results and editable fields
@@ -1425,13 +1744,13 @@ def render_mimic_workflow():
             st.divider()
             st.markdown(f"""
             <div class="success-card">
-                <strong>📄 Document Type:</strong> {analysis.get('document_subtype', 'Unknown')}<br>
-                <strong>🎨 Tone:</strong> {analysis.get('tone', 'formal')}<br>
-                <strong>📝 Style:</strong> {analysis.get('style_notes', 'Standard legal document')}
+                <strong>ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¾ Document Type:</strong> {analysis.get('document_subtype', 'Unknown')}<br>
+                <strong>ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â½ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¨ Tone:</strong> {analysis.get('tone', 'formal')}<br>
+                <strong>ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Style:</strong> {analysis.get('style_notes', 'Standard legal document')}
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown("### ✏️ Edit Field Values")
+            st.markdown("### ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Edit Field Values")
             st.caption("Modify the extracted values below. The AI will generate a new document with your changes.")
 
             # Editable form for extracted fields
@@ -1456,7 +1775,7 @@ def render_mimic_workflow():
 
                 st.divider()
                 submitted = st.form_submit_button(
-                    "✨ Generate Document",
+                    "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¨ Generate Document",
                     type="primary",
                     use_container_width=True
                 )
@@ -1475,7 +1794,7 @@ def render_mimic_workflow():
                             )
                             st.session_state.generated_text = text
                             st.session_state.generated_title = f"{analysis.get('document_subtype', 'Document')} (Mimicked)"
-                            st.toast("✅ Document generated!", icon="✅")
+                            st.toast("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ Document generated!", icon="ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Generation failed: {e}")
@@ -1511,7 +1830,7 @@ def render_guided_workflow():
         doc_def = DOCUMENT_TYPES[doc_type]
         st.markdown(f"*{doc_def['description']}*")
 
-        if st.button("Start Building →", type="primary", use_container_width=True):
+        if st.button("Start Building ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢", type="primary", use_container_width=True):
             st.session_state.guided_step = 1
             st.session_state.guided_doc_type = doc_type
             st.session_state.guided_fields = doc_def["fields"]
@@ -1564,12 +1883,12 @@ def render_guided_workflow():
 
             with col1:
                 if current_idx > 0:
-                    if st.button("← Previous", use_container_width=True):
+                    if st.button("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Previous", use_container_width=True):
                         st.session_state.guided_current_field -= 1
                         st.rerun()
 
             with col2:
-                next_label = "Next →" if current_idx < len(fields) - 1 else "Generate Document ✨"
+                next_label = "Next ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢" if current_idx < len(fields) - 1 else "Generate Document ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¨"
                 if st.button(next_label, type="primary", use_container_width=True):
                     # Store answer
                     st.session_state.guided_answers[field["key"]] = answer
@@ -1592,21 +1911,21 @@ def render_guided_workflow():
                                     use_sec=False,
                                 )
                                 st.session_state.generated_text = text
-                                st.session_state.generated_title = f"{DOCUMENT_TYPES[doc_type]['label']} — Draft"
+                                st.session_state.generated_title = f"{DOCUMENT_TYPES[doc_type]['label']} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Draft"
 
                                 # Reset guided workflow
                                 st.session_state.guided_step = 0
                                 st.session_state.guided_answers = {}
                                 st.session_state.guided_current_field = 0
 
-                                st.toast("✅ Document generated!", icon="✅")
+                                st.toast("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ Document generated!", icon="ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Generation failed: {e}")
 
             # Show summary of answers so far
             if st.session_state.guided_answers:
-                with st.expander("📋 Review Your Answers"):
+                with st.expander("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ Review Your Answers"):
                     for key, value in st.session_state.guided_answers.items():
                         if value:
                             st.caption(f"**{key.replace('_', ' ').title()}:** {value}")
@@ -1639,7 +1958,7 @@ def render_quick_workflow():
     # Dynamic form
     params = {}
     with st.form("quick_gen_form"):
-        st.markdown("### 📋 Document Details")
+        st.markdown("### ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ Document Details")
         st.caption("Fill in the information below. The AI will use these details to draft your document.")
 
         for field in doc_def["fields"]:
@@ -1673,18 +1992,18 @@ def render_quick_workflow():
                 )
 
         st.divider()
-        st.markdown("### 🔍 Optional: Enhance with External Data")
+        st.markdown("### ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Optional: Enhance with External Data")
         st.caption("Pull additional context from external databases (optional)")
 
         use_sec = st.checkbox(
-            "📊 Include SEC EDGAR data",
+            "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  Include SEC EDGAR data",
             help="Fetch relevant public company filings from SEC EDGAR database",
             key="quick_use_sec"
         )
 
         st.divider()
         submitted = st.form_submit_button(
-            "✨ Generate Document",
+            "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¨ Generate Document",
             type="primary",
             use_container_width=True,
             help="This may take 30-60 seconds depending on the document complexity"
@@ -1712,286 +2031,50 @@ def render_quick_workflow():
                 )
                 st.session_state.generated_text = text
                 st.session_state.generated_title = (
-                    f"{doc_def['label']} — {params.get('party_a', '') or params.get('entity_name', '') or params.get('case_caption', '') or params.get('re', '') or 'Draft'}"
+                    f"{doc_def['label']} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â {params.get('party_a', '') or params.get('entity_name', '') or params.get('case_caption', '') or params.get('re', '') or 'Draft'}"
                 )
-                st.toast("✅ Document generated successfully!", icon="✅")
+                st.toast("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ Document generated successfully!", icon="ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦")
             except Exception as e:
                 st.error(f"Generation failed: {e}")
 
 
 # ======================================================================
-# TAB 2 — Generate Document (Main Function)
+# TAB 2 ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Generate Document (Main Function)
 # ======================================================================
 
 def render_generate_tab():
     """Render the document generation interface with three workflow options."""
     st.markdown("""
     <div class="card-header">
-        📝 Generate Legal Documents
+        ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Generate Legal Documents
     </div>
     """, unsafe_allow_html=True)
 
     # Check LLM availability
     llm = get_llm()
     if not llm.is_available():
-        st.markdown("""
-        <div class="error-card">
-            <strong>⚠️ AI Provider Not Configured</strong><br><br>
-            To generate documents, you need to configure an AI provider.<br><br>
-            <strong>Quick Fix:</strong><br>
-            1. Go to the <strong>Settings</strong> tab above<br>
-            2. Choose either <strong>OpenAI</strong> (cloud) or <strong>Ollama</strong> (local)<br>
-            3. Enter your API key or configure Ollama<br>
-            4. Come back here to start generating documents
-        </div>
-        """, unsafe_allow_html=True)
-        return
-
-    # Workflow selection
-    st.markdown("""
-    <div class="info-card" style="margin-bottom: 1.5rem;">
-        💡 <strong>Choose your workflow:</strong> Select how you'd like to generate your document below.
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Three workflow options as tabs
-    workflow_tab1, workflow_tab2, workflow_tab3 = st.tabs([
-        "🎨 Mimic a Document",
-        "🤖 AI-Guided Builder",
-        "⚡ Quick Generate"
-    ])
-
-    with workflow_tab1:
-        render_mimic_workflow()
-
-    with workflow_tab2:
-        render_guided_workflow()
-
-    with workflow_tab3:
-        render_quick_workflow()
-
-    # Shared preview & download section (shown when any workflow generates a document)
-    if st.session_state.get("generated_text"):
-        st.divider()
-        st.markdown("""
-        <div class="card-header">
-            📄 Preview & Edit
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.caption("Review and edit your generated document below before downloading.")
-
-        # Editable text area
-        edited_text = st.text_area(
-            "Generated document",
-            value=st.session_state.generated_text,
-            height=500,
-            key="preview_edit",
-        )
-
-        # Update session state if user edits
-        if edited_text != st.session_state.generated_text:
-            st.session_state.generated_text = edited_text
-
-        col1, col2, col3 = st.columns([2, 1, 1])
-
-        with col2:
-            if st.button("🔄 Reset", use_container_width=True, help="Clear the generated document"):
-                st.session_state.generated_text = ""
-                st.session_state.generated_title = ""
-                st.rerun()
-
-        with col3:
-            docx_bytes = DocumentGenerator.text_to_docx(
-                st.session_state.generated_text,
-                st.session_state.generated_title,
-            )
-            safe_name = "".join(
-                c if c.isalnum() or c in (" ", "-", "_") else "_"
-                for c in st.session_state.generated_title
-            ).strip()
-            st.download_button(
-                label="⬇️ Download .docx",
-                data=docx_bytes,
-                file_name=f"{safe_name}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                type="primary",
-                use_container_width=True
-            )
-
-
-# ======================================================================
-# TAB 3 — Settings
-# ======================================================================
-
-def render_settings_tab():
-    """Render the settings interface."""
-    current_user = st.session_state.current_user
-
-    # Show environment info
-    if is_streamlit_cloud():
-        st.markdown("""
-        <div class="info-card">
-            ☁️ <strong>Running on Streamlit Cloud</strong><br>
-            Use OpenAI provider (Ollama requires local installation).
-            Secrets should be configured in the Streamlit Cloud dashboard.
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Create tabs for different settings sections
-    settings_tab1, settings_tab2, settings_tab3, settings_tab4 = st.tabs([
-        "🤖 LLM Provider",
-        "👤 Profile",
-        "🔌 Integrations",
-        "👥 Admin" if current_user.is_admin() else "👤 Account"
-    ])
-
-    # LLM Provider Settings
-    with settings_tab1:
-        st.markdown("""
-        <div class="info-card">
-            The AI language model powers document generation and editing. Choose your preferred provider.
-        </div>
-        """, unsafe_allow_html=True)
-
-        if SHARED_KNOWLEDGE_SCOPE:
-            st.info("Shared learning is enabled: uploads from all users feed one local knowledge base.")
-
-        if FORCE_OLLAMA_FOR_ALL_USERS:
-            provider = "ollama"
-            st.info("Self-host mode: Ollama is enforced for all users.")
-        else:
-            provider = st.radio(
-                "Select AI Provider",
-                options=["ollama", "openai"],
-                format_func=lambda p: "Ollama (Local, recommended)" if p == "ollama" else "OpenAI (API key)",
-                index=0 if st.session_state.llm_provider == "ollama" else 1,
-                key="settings_provider",
-            )
-
-        model = st.session_state.llm_model
-        base_url = st.session_state.llm_base_url
-        api_key = st.session_state.openai_api_key
-        is_openai_key_valid = True
-
-        if provider == "ollama":
-            st.markdown("#### Ollama Configuration")
-            base_url = st.text_input(
-                "Ollama API URL",
-                value=st.session_state.llm_base_url,
-                key="settings_base_url",
-                help="Default: http://localhost:11434/v1"
-            )
-            tmp_llm = LLMBackend(provider="ollama", base_url=base_url)
-            models = tmp_llm.list_models()
-            if models:
-                model = st.selectbox(
-                    "Select Model",
-                    options=models,
-                    index=models.index(st.session_state.llm_model)
-                    if st.session_state.llm_model in models
-                    else 0,
-                    key="settings_model_select",
-                )
-                st.success(f"Connected to Ollama - {len(models)} model(s) available")
-            else:
-                model = st.text_input(
-                    "Model name",
-                    value=st.session_state.llm_model,
-                    key="settings_model_text",
-                    placeholder="llama3.1:8b"
-                )
-                st.error("Could not connect to Ollama. Make sure it's running.")
-                st.caption("Start Ollama: `ollama serve`")
-        else:
-            st.markdown("#### OpenAI Configuration")
-            api_key = st.text_input(
-                "OpenAI API Key",
-                value=st.session_state.openai_api_key if st.session_state.openai_api_key not in ["", "your-api-key-here"] else "",
-                type="password",
-                key="settings_openai_key",
-                placeholder="sk-proj-..."
-            )
-            model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"]
-            current_model = st.session_state.llm_model if st.session_state.llm_provider == "openai" else "gpt-4o-mini"
-            model = st.selectbox(
-                "Model",
-                options=model_options,
-                index=model_options.index(current_model) if current_model in model_options else 0,
-                key="settings_openai_model",
-            )
-            base_url = "https://api.openai.com/v1"
-
-            is_openai_key_valid = bool(api_key and api_key.startswith("sk-") and len(api_key) > 20)
-            if is_openai_key_valid:
-                st.success("API key format looks valid")
-            elif api_key:
-                st.warning("API key format may be invalid (should start with 'sk-')")
-            else:
-                st.info("Enter your OpenAI API key to enable cloud generation.")
-
-        save_disabled = provider == "openai" and not is_openai_key_valid
-        if save_disabled:
-            st.caption("Enter a valid OpenAI API key to save OpenAI settings.")
-
-        if st.button("Save Settings", type="primary", use_container_width=True, disabled=save_disabled):
-            st.session_state.llm_provider = provider
-            st.session_state.llm_model = model
-            st.session_state.llm_base_url = base_url
-            if provider == "openai":
-                st.session_state.openai_api_key = api_key
-            st.toast("Settings saved")
-            st.success("AI provider settings saved successfully.")
-            st.rerun()
-
-    # Profile Settings
-    with settings_tab2:
-        render_profile_settings(auth_manager, current_user)
-
-    # Integrations
-    with settings_tab3:
-        st.markdown("""
-        <div class="card-header">
-            🔌 External Integrations
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("""
-        <div class="info-card">
-            Configure external data sources to enhance document generation with real-world data.
-        </div>
-        """, unsafe_allow_html=True)
-
-        # SEC EDGAR
-        st.markdown("### 📊 SEC EDGAR")
-        st.caption(
-            "The SEC EDGAR database provides free access to company filings. "
-            "Useful for corporate filings and contracts."
-        )
-        sec_ua = st.text_input(
-            "User-Agent (Your Name + Email)",
-            value=st.session_state.sec_user_agent,
-            placeholder="John Doe john.doe@lawfirm.com",
-            help="SEC requires a User-Agent header with your name and email for API access.",
-            key="settings_sec_ua",
-        )
-        if st.button("💾 Save SEC EDGAR Settings", use_container_width=True):
-            st.session_state.sec_user_agent = sec_ua
-            st.toast("✅ SEC EDGAR settings saved!", icon="✅")
-            st.success("SEC EDGAR settings saved successfully.")
-
-    # Admin Panel or Account Info
-    with settings_tab4:
-        if current_user.is_admin():
-            render_admin_panel(auth_manager, current_user)
-        else:
+        if st.session_state.llm_provider == "ollama":
             st.markdown("""
-            <div class="info-card">
-                ℹ️ <strong>User Account</strong><br>
-                You are logged in as a regular user. Contact an administrator for account-related requests.
+            <div class="error-card">
+                <strong>Ollama Not Running</strong><br><br>
+                Start Ollama (<code>ollama serve</code>) and refresh this page, or switch providers in Settings.
             </div>
             """, unsafe_allow_html=True)
-
+        elif st.session_state.llm_provider == "hf_local":
+            reason = st.session_state.get("hf_local_error", "HF Local model is not available. Check Settings.")
+            st.markdown(f"""
+            <div class="error-card">
+                <strong>HF Local Model Unavailable</strong><br><br>
+                {html_lib.escape(reason)}
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="error-card">
+                <strong>OpenAI API Key Required</strong><br><br>
+                Add a valid API key in Settings before generating documents.
+            </div>
+            """, unsafe_allow_html=True)
 
 # ======================================================================
 # NEW WORKFLOW: Two-Path Landing Page
@@ -3151,17 +3234,25 @@ def render_settings_page():
             provider = "ollama"
             st.info("Self-host mode: Ollama is enforced for all users.")
         else:
+            provider_options = ["ollama", "hf_local", "openai"]
+            current_provider = st.session_state.llm_provider if st.session_state.llm_provider in provider_options else "ollama"
             provider = st.radio(
                 "Select AI Provider",
-                options=["ollama", "openai"],
-                format_func=lambda p: "Ollama (Local, free)" if p == "ollama" else "OpenAI (Cloud API)",
-                index=0 if st.session_state.llm_provider == "ollama" else 1,
+                options=provider_options,
+                format_func=lambda p: "Ollama (Local, free)" if p == "ollama" else ("Hugging Face Local (folder path)" if p == "hf_local" else "OpenAI (Cloud API)"),
+                index=provider_options.index(current_provider),
                 key="settings_provider",
             )
 
         model = st.session_state.llm_model
         base_url = st.session_state.llm_base_url
         api_key = st.session_state.openai_api_key
+        hf_local_model_path = str(st.session_state.get("hf_local_model_path", "") or "")
+        hf_local_max_new_tokens_raw = st.session_state.get("hf_local_max_new_tokens", "2048")
+        try:
+            hf_local_max_new_tokens = int(hf_local_max_new_tokens_raw)
+        except Exception:
+            hf_local_max_new_tokens = 2048
         is_openai_key_valid = True
 
         if provider == "ollama":
@@ -3193,6 +3284,35 @@ def render_settings_page():
                 )
                 st.error("Could not connect to Ollama. Make sure it's running.")
                 st.caption("Start Ollama: `ollama serve`")
+
+        elif provider == "hf_local":
+            st.markdown("#### Hugging Face Local Configuration")
+            hf_local_model_path = st.text_input(
+                "Local model folder path",
+                value=hf_local_model_path,
+                key="settings_hf_model_path",
+                placeholder=r"C:\models\my-hf-model",
+                help="Folder must contain config.json, model weights, and tokenizer files.",
+            )
+            hf_local_max_new_tokens = st.number_input(
+                "Max new tokens per generation",
+                min_value=64,
+                max_value=8192,
+                step=64,
+                value=hf_local_max_new_tokens,
+                key="settings_hf_max_tokens",
+            )
+            model = os.path.basename(hf_local_model_path.rstrip("\\/")) if hf_local_model_path.strip() else "hf-local"
+            base_url = "local://hf"
+
+            if hf_local_model_path.strip():
+                if os.path.isdir(hf_local_model_path.strip()):
+                    st.success("Model path exists. Save settings, then generate from the workspace.")
+                else:
+                    st.warning("Model path does not exist on this machine.")
+            else:
+                st.info("Enter a local Hugging Face model folder path.")
+
         else:
             st.markdown("#### OpenAI Configuration")
             api_key = st.text_input(
@@ -3220,9 +3340,11 @@ def render_settings_page():
             else:
                 st.info("Enter your OpenAI API key to enable cloud generation.")
 
-        save_disabled = provider == "openai" and not is_openai_key_valid
-        if save_disabled:
+        save_disabled = (provider == "openai" and not is_openai_key_valid) or (provider == "hf_local" and not hf_local_model_path.strip())
+        if provider == "openai" and save_disabled:
             st.caption("Enter a valid OpenAI API key to save OpenAI settings.")
+        if provider == "hf_local" and save_disabled:
+            st.caption("Enter a valid local model folder path to save HF Local settings.")
 
         if st.button("Save Settings", type="primary", use_container_width=True, disabled=save_disabled):
             st.session_state.llm_provider = provider
@@ -3230,6 +3352,10 @@ def render_settings_page():
             st.session_state.llm_base_url = base_url
             if provider == "openai":
                 st.session_state.openai_api_key = api_key
+            if provider == "hf_local":
+                st.session_state.hf_local_model_path = hf_local_model_path.strip()
+                st.session_state.hf_local_max_new_tokens = str(int(hf_local_max_new_tokens))
+                st.session_state.hf_local_error = ""
             st.toast("Settings saved")
             st.success("AI provider settings saved successfully.")
             st.rerun()
@@ -3316,10 +3442,10 @@ def render_knowledge_base_page():
 
     # Tabs for different sections
     kb_tab1, kb_tab2, kb_tab3, kb_tab4 = st.tabs([
-        "📖 Learned Templates",
-        "📁 Indexed Documents",
-        "⚙️ Scanner Settings",
-        "📊 Scan History"
+        "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ Learned Templates",
+        "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Indexed Documents",
+        "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Scanner Settings",
+        "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  Scan History"
     ])
 
     # Tab 1: Learned Templates
@@ -3336,7 +3462,7 @@ def render_knowledge_base_page():
                 doc_type = type_info["type"]
                 count = type_info["count"]
 
-                with st.expander(f"📄 {doc_type} — Learned from {count} documents"):
+                with st.expander(f"ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¾ {doc_type} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Learned from {count} documents"):
                     learned = knowledge_db.get_learned_template(doc_type, user_id=scope_user_id)
 
                     if learned:
@@ -3346,9 +3472,9 @@ def render_knowledge_base_page():
                         for field in learned["fields"]:
                             confidence = field.get("confidence", 0)
                             frequency = field.get("frequency", 0)
-                            bar_color = "🟢" if confidence >= 0.7 else "🟡" if confidence >= 0.5 else "🔴"
+                            bar_color = "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢" if confidence >= 0.7 else "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡" if confidence >= 0.5 else "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â´"
                             st.markdown(
-                                f"{bar_color} **{field['label']}** — "
+                                f"{bar_color} **{field['label']}** ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â "
                                 f"{confidence*100:.0f}% confidence ({frequency}/{count} documents)"
                             )
 
@@ -3393,7 +3519,7 @@ def render_knowledge_base_page():
 
             st.markdown("#### Status")
             if status["is_running"]:
-                st.success("✅ Scanner is running")
+                st.success("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ Scanner is running")
 
                 if status.get("current_progress"):
                     prog = status["current_progress"]
@@ -3401,7 +3527,7 @@ def render_knowledge_base_page():
                     st.caption(f"Processing: {prog['file']}")
                     st.caption(f"{prog['current']} / {prog['total']} files")
             else:
-                st.warning("⚠️ Scanner is stopped")
+                st.warning("ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Scanner is stopped")
 
             st.divider()
 
@@ -3409,7 +3535,7 @@ def render_knowledge_base_page():
             scan_paths = status.get("scan_paths", [])
             for path in scan_paths:
                 exists = os.path.exists(path)
-                icon = "✅" if exists else "❌"
+                icon = "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦" if exists else "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢"
                 st.markdown(f"{icon} `{path}`")
 
             st.divider()
@@ -3475,7 +3601,7 @@ def render_knowledge_base_page():
             st.info("No scan history yet.")
         else:
             for scan in history:
-                status_icon = "✅" if scan["status"] == "completed" else "⏳"
+                status_icon = "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦" if scan["status"] == "completed" else "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³"
 
                 with st.expander(f"{status_icon} Scan on {scan['scan_start'][:10]}"):
                     col_a, col_b, col_c = st.columns(3)
@@ -3539,27 +3665,39 @@ def main():
     st.title("Corporate Law Document Generator")
     st.caption("Document generation workspace")
 
-    top_actions = st.columns(4)
+    top_actions = st.columns(5)
     with top_actions[0]:
         if st.button("Workspace Home", use_container_width=True, key="top_workspace"):
             st.session_state.workflow_mode = None
             st.session_state.show_settings = False
             st.session_state.show_knowledge_base = False
+            st.session_state.show_model_improvement = False
             st.rerun()
     with top_actions[1]:
         if st.button("Settings", use_container_width=True, key="top_settings"):
             st.session_state.show_settings = True
             st.session_state.show_knowledge_base = False
+            st.session_state.show_model_improvement = False
             st.rerun()
     with top_actions[2]:
         if current_user.is_admin():
             if st.button("Knowledge Base", use_container_width=True, key="top_knowledge"):
                 st.session_state.show_knowledge_base = True
                 st.session_state.show_settings = False
+                st.session_state.show_model_improvement = False
                 st.rerun()
         else:
             st.button("Knowledge Base (Admin)", use_container_width=True, key="top_knowledge_disabled", disabled=True)
     with top_actions[3]:
+        if current_user.is_admin():
+            if st.button("Model Improvement", use_container_width=True, key="top_model_improvement"):
+                st.session_state.show_model_improvement = True
+                st.session_state.show_knowledge_base = False
+                st.session_state.show_settings = False
+                st.rerun()
+        else:
+            st.button("Model Improvement (Admin)", use_container_width=True, key="top_model_improvement_disabled", disabled=True)
+    with top_actions[4]:
         if st.button("Sign Out", use_container_width=True, key="top_logout"):
             logout(st.session_state)
             st.rerun()
@@ -3567,6 +3705,7 @@ def main():
     current_view = (
         "Settings" if st.session_state.get("show_settings")
         else "Knowledge Base" if st.session_state.get("show_knowledge_base")
+        else "Model Improvement" if st.session_state.get("show_model_improvement")
         else "Workspace"
     )
     st.caption(f"Current view: {current_view}")
@@ -3577,7 +3716,15 @@ def main():
             st.markdown("""
             <div class="error-card">
                 <strong>Ollama Not Running</strong><br><br>
-                Start Ollama (<code>ollama serve</code>) and refresh this page, or switch to OpenAI in Settings.
+                Start Ollama (<code>ollama serve</code>) and refresh this page, or switch providers in Settings.
+            </div>
+            """, unsafe_allow_html=True)
+        elif st.session_state.llm_provider == "hf_local":
+            reason = st.session_state.get("hf_local_error", "HF Local model is not available. Check Settings.")
+            st.markdown(f"""
+            <div class="error-card">
+                <strong>HF Local Model Unavailable</strong><br><br>
+                {html_lib.escape(reason)}
             </div>
             """, unsafe_allow_html=True)
         else:
@@ -3598,6 +3745,14 @@ def main():
         else:
             st.error("Access denied. Knowledge Base management is admin-only.")
             st.session_state.show_knowledge_base = False
+        return
+
+    if st.session_state.get("show_model_improvement"):
+        if current_user.is_admin():
+            render_model_improvement_page()
+        else:
+            st.error("Access denied. Model improvement controls are admin-only.")
+            st.session_state.show_model_improvement = False
         return
 
     workflow_mode = st.session_state.get("workflow_mode")

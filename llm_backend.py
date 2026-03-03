@@ -44,6 +44,8 @@ class LLMBackend:
         messages: list[dict],
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> str:
         """Send a chat completion request and return the assistant text."""
         kwargs = dict(
@@ -52,9 +54,14 @@ class LLMBackend:
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        if top_p is not None:
+            kwargs["top_p"] = top_p
         # Ollama supports extra_body for native parameters like num_ctx
         if self.provider == "ollama":
-            kwargs["extra_body"] = {"num_ctx": 8192}
+            extra_body = {"num_ctx": 8192}
+            if top_k is not None:
+                extra_body["top_k"] = int(top_k)
+            kwargs["extra_body"] = extra_body
 
         response = self.client.chat.completions.create(**kwargs)
         return response.choices[0].message.content
@@ -65,6 +72,8 @@ class LLMBackend:
         user_prompt: str,
         temperature: float = 0.3,
         max_tokens: int = 4096,
+        top_p: float | None = None,
+        top_k: int | None = None,
     ) -> str:
         """Generate a long-form document with a system + user prompt pair."""
         messages = [
@@ -77,8 +86,13 @@ class LLMBackend:
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        if top_p is not None:
+            kwargs["top_p"] = top_p
         if self.provider == "ollama":
-            kwargs["extra_body"] = {"num_ctx": 8192}
+            extra_body = {"num_ctx": 8192}
+            if top_k is not None:
+                extra_body["top_k"] = int(top_k)
+            kwargs["extra_body"] = extra_body
 
         response = self.client.chat.completions.create(**kwargs)
         return response.choices[0].message.content

@@ -2,8 +2,10 @@
 
 Usage:
     python prepare_data.py
+    python prepare_data.py --extra-dir C:\\path\\to\\extra\\corpus
 """
 
+import argparse
 import hashlib
 import json
 import logging
@@ -142,10 +144,10 @@ def build_training_example(text: str, doc_type: str, context: str, chunk_idx: in
 # Main pipeline
 # ======================================================================
 
-def scan_files() -> list[Path]:
+def scan_files(document_dirs: list[Path]) -> list[Path]:
     """Recursively scan configured directories for supported files."""
     files = []
-    for directory in DOCUMENT_DIRS:
+    for directory in document_dirs:
         if not directory.exists():
             print(f"  [SKIP] Directory not found: {directory}")
             continue
@@ -155,13 +157,32 @@ def scan_files() -> list[Path]:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Build fine-tuning dataset from legal documents")
+    parser.add_argument(
+        "--extra-dir",
+        action="append",
+        default=[],
+        help="Additional directory to scan (can be provided multiple times)",
+    )
+    parser.add_argument(
+        "--skip-default-dirs",
+        action="store_true",
+        help="Only scan --extra-dir locations and ignore DOCUMENT_DIRS from config.py",
+    )
+    args = parser.parse_args()
+
+    document_dirs: list[Path] = []
+    if not args.skip_default_dirs:
+        document_dirs.extend(DOCUMENT_DIRS)
+    document_dirs.extend(Path(p).expanduser() for p in args.extra_dir if p)
+
     print("=" * 60)
     print("LEGAL DOCUMENT TRAINING DATA PREPARATION")
     print("=" * 60)
 
     # 1. Scan for files
     print("\n[1/5] Scanning directories for documents...")
-    all_files = scan_files()
+    all_files = scan_files(document_dirs)
     print(f"  Found {len(all_files)} files")
 
     if not all_files:
