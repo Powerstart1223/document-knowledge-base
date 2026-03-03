@@ -159,7 +159,8 @@ def enforce_web_access_security() -> None:
     local_hosts = {"localhost", "127.0.0.1", "::1"}
     is_local = host in local_hosts
 
-    if STRICT_HOST_VALIDATION and TRUSTED_HOSTS and host not in TRUSTED_HOSTS:
+    # Never block localhost loopback hosts, even if TRUSTED_HOSTS is customized.
+    if STRICT_HOST_VALIDATION and TRUSTED_HOSTS and not is_local and host not in TRUSTED_HOSTS:
         st.error("Access denied: untrusted host header.")
         st.stop()
 
@@ -1186,6 +1187,8 @@ def start_job(job_key: str, command: list[str], env_overrides: dict[str, str] | 
 
     log_file.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    # Force immediate log flushing from Python child processes.
+    env["PYTHONUNBUFFERED"] = "1"
     if env_overrides:
         env.update({k: v for k, v in env_overrides.items() if v is not None})
 
@@ -1212,6 +1215,7 @@ def start_job(job_key: str, command: list[str], env_overrides: dict[str, str] | 
         "started_at": __import__("datetime").datetime.now().isoformat(),
         "command": command,
         "env_keys": sorted(list((env_overrides or {}).keys())),
+        "log_file": str(log_file),
     }
     meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return True, f"Started {job_key} (PID {proc.pid})."
@@ -1294,6 +1298,7 @@ def render_model_improvement_page():
             if st.button("Start Strategy Job", type="primary", use_container_width=True, key="mi_start_strategy"):
                 cmd = [
                     sys.executable,
+                    "-u",
                     "-m",
                     "agents.multi_agent_improver",
                     "--mode",
@@ -1353,6 +1358,7 @@ def render_model_improvement_page():
             if st.button("Start Weight Training", type="primary", use_container_width=True, key="mi_start_weight"):
                 cmd = [
                     sys.executable,
+                    "-u",
                     "finetune/continuous_weight_improvement.py",
                     "--edgar-queries",
                     edgar_queries_w,

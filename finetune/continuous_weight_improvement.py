@@ -62,6 +62,7 @@ def main() -> None:
     if not args.skip_corpus_build:
         cmd = [
             sys.executable,
+            "-u",
             str(FINETUNE_DIR / "build_training_corpus.py"),
             "--output-dir",
             str(corpus_dir),
@@ -88,23 +89,24 @@ def main() -> None:
     if edgar_dir.exists():
         extra_dirs.append(str(edgar_dir))
 
-    prepare_cmd = [sys.executable, str(FINETUNE_DIR / "prepare_data.py")]
+    prepare_cmd = [sys.executable, "-u", str(FINETUNE_DIR / "prepare_data.py")]
     for p in extra_dirs:
         prepare_cmd.extend(["--extra-dir", p])
     run(prepare_cmd, cwd=PROJECT_ROOT)
 
-    train_cmd = [sys.executable, str(FINETUNE_DIR / "train.py")]
+    train_cmd = [sys.executable, "-u", str(FINETUNE_DIR / "train.py")]
     if args.fallback:
         train_cmd.append("--fallback")
     run(train_cmd, cwd=PROJECT_ROOT)
 
     if not args.skip_export:
-        run([sys.executable, str(FINETUNE_DIR / "export_to_ollama.py")], cwd=PROJECT_ROOT)
+        run([sys.executable, "-u", str(FINETUNE_DIR / "export_to_ollama.py")], cwd=PROJECT_ROOT)
 
     if not args.skip_doc_type_improvement:
         run(
             [
                 sys.executable,
+                "-u",
                 str(FINETUNE_DIR / "improve_document_types.py"),
                 "--corpus-dir",
                 str(corpus_dir),
