@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import streamlit as st
-from typing import List
+from typing import Any, List
 from datetime import date, datetime
 import logging
 
@@ -1130,6 +1130,8 @@ def get_db_stats() -> dict:
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONTROL_DIR = PROJECT_ROOT / "artifacts" / "ui_jobs"
 CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+PLAN_DIR = PROJECT_ROOT / "artifacts" / "improvement_plans"
+PLAN_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _job_files(job_key: str) -> tuple[Path, Path, Path]:
@@ -1360,6 +1362,134 @@ def _extract_json_array(text: str) -> list:
     return []
 
 
+def _extract_json_object(text: str) -> dict[str, Any]:
+    raw = (text or "").strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            value = json.loads(raw[start : end + 1])
+            return value if isinstance(value, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _flatten_query_sets(value: Any) -> list[str]:
+    out: list[str] = []
+
+    def _walk(item: Any) -> None:
+        if isinstance(item, str):
+            token = item.strip()
+            if token:
+                out.append(token)
+            return
+        if isinstance(item, list):
+            for nested in item:
+                _walk(nested)
+
+    _walk(value)
+    return out
+
+
+def generate_learning_plan_with_openai(master_prompt: str) -> tuple[dict[str, Any] | None, str]:
+    prompt = (master_prompt or "").strip()
+    if not prompt:
+        return None, "Enter a master improvement prompt first."
+
+    api_key = (st.session_state.get("openai_api_key") or "").strip()
+    if not api_key:
+        return None, "OpenAI API key is required to generate the initial plan."
+
+    model = str(st.session_state.get("openai_planner_model") or "gpt-4o-mini")
+    planner = LLMBackend(
+        provider="openai",
+        model=model,
+        api_key=api_key,
+    )
+
+    schema_hint = {
+        "strategy_objectives": ["..."],
+        "edgar_query_sets": [["..."], ["..."]],
+        "evaluation_rubric": ["..."],
+        "document_types_to_improve": ["..."],
+        "training_curriculum": ["..."],
+        "stop_conditions": ["..."],
+    }
+
+    messages = [
+        {"role": "system", "content": "Return strict JSON object only. No markdown."},
+        {
+            "role": "user",
+            "content": (
+                "You are designing an improvement plan for local legal-model optimization. "
+                "Given the master prompt, return a JSON object exactly with keys:\n"
+                "strategy_objectives, edgar_query_sets, evaluation_rubric, "
+                "document_types_to_improve, training_curriculum, stop_conditions.\n"
+                "All values must be arrays. `edgar_query_sets` must be array-of-arrays of query strings.\n"
+                f"Example shape: {json.dumps(schema_hint)}\n\n"
+                f"Master prompt:\n{prompt}"
+            ),
+        },
+    ]
+
+    try:
+        raw = planner.chat(messages, temperature=0.1, top_p=0.9, max_tokens=1200)
+    except Exception as exc:
+        return None, f"OpenAI planning failed: {exc}"
+
+    parsed = _extract_json_object(raw)
+    if not parsed:
+        return None, "OpenAI response could not be parsed as JSON plan."
+
+    for key in (
+        "strategy_objectives",
+        "edgar_query_sets",
+        "evaluation_rubric",
+        "document_types_to_improve",
+        "training_curriculum",
+        "stop_conditions",
+    ):
+        if key not in parsed or not isinstance(parsed[key], list):
+            return None, f"Plan missing required array field: {key}"
+
+    return parsed, "Learning plan generated from OpenAI."
+
+
+def save_improvement_plan(master_prompt: str, plan: dict[str, Any]) -> str:
+    plan_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+    payload = {
+        "plan_id": plan_id,
+        "created_at": datetime.utcnow().isoformat(),
+        "master_prompt": master_prompt,
+        "plan": plan,
+    }
+    (PLAN_DIR / f"{plan_id}.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return plan_id
+
+
+def list_improvement_plans() -> list[str]:
+    ids = [p.stem for p in PLAN_DIR.glob("*.json") if p.is_file()]
+    return sorted(ids, reverse=True)
+
+
+def load_improvement_plan(plan_id: str) -> dict[str, Any] | None:
+    path = PLAN_DIR / f"{plan_id}.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def generate_edgar_queries_with_local_model(base_prompt: str, max_queries: int = 8) -> tuple[str, str]:
     prompt = (base_prompt or "").strip()
     if not prompt:
@@ -1418,6 +1548,10 @@ def _new_strategy_job_key() -> str:
     return f"strategy_agents_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}"
 
 
+def _new_weight_job_key() -> str:
+    return f"weight_training_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}"
+
+
 def render_model_improvement_page():
     """Admin UI to run/monitor model-improvement jobs without Task Scheduler."""
     current_user = st.session_state.current_user
@@ -1456,6 +1590,55 @@ def render_model_improvement_page():
 
     with strategy_tab:
         st.markdown("#### Strategy optimization (no weight changes)")
+        st.markdown("##### Plan-First Orchestration (OpenAI -> Local Agents)")
+        if "mi_master_prompt" not in st.session_state:
+            st.session_state.mi_master_prompt = ""
+        if "mi_selected_plan_id" not in st.session_state:
+            st.session_state.mi_selected_plan_id = ""
+        master_prompt = st.text_area(
+            "Master improvement prompt",
+            height=140,
+            key="mi_master_prompt",
+            help="Use OpenAI once to generate a structured plan. Local agents then execute strategy + weight improvement from that plan.",
+        )
+        if st.button(
+            "Generate Learning Plan (OpenAI)",
+            type="primary",
+            use_container_width=True,
+            key="mi_generate_plan_openai",
+        ):
+            plan, message = generate_learning_plan_with_openai(master_prompt)
+            if plan:
+                plan_id = save_improvement_plan(master_prompt, plan)
+                st.session_state.mi_selected_plan_id = plan_id
+                st.success(f"{message} Saved plan: {plan_id}")
+            else:
+                st.warning(message)
+
+        plan_ids = list_improvement_plans()
+        if plan_ids:
+            if st.session_state.mi_selected_plan_id not in plan_ids:
+                st.session_state.mi_selected_plan_id = plan_ids[0]
+            selected_plan_id = st.selectbox(
+                "Plan artifacts",
+                options=plan_ids,
+                index=plan_ids.index(st.session_state.mi_selected_plan_id),
+                key="mi_plan_selector",
+            )
+            st.session_state.mi_selected_plan_id = selected_plan_id
+            selected_plan_payload = load_improvement_plan(selected_plan_id) or {}
+            selected_plan = selected_plan_payload.get("plan", {}) if isinstance(selected_plan_payload, dict) else {}
+            if selected_plan:
+                objectives = selected_plan.get("strategy_objectives", [])
+                doc_types = selected_plan.get("document_types_to_improve", [])
+                st.caption(f"Objectives: {len(objectives)} | Document types: {len(doc_types)}")
+                qlist = _flatten_query_sets(selected_plan.get("edgar_query_sets", []))
+                if qlist:
+                    st.caption(f"Plan query preview: {', '.join(qlist[:6])}")
+        else:
+            st.info("No OpenAI plan yet. Generate one from the master prompt.")
+            selected_plan = {}
+
         mode = st.selectbox("Data mode", ["hybrid", "edgar", "uploads"], index=0, key="mi_strategy_mode")
         iterations = st.number_input("Iterations", min_value=1, max_value=50, value=6, key="mi_strategy_iterations")
         candidates = st.number_input("Candidates per iteration", min_value=2, max_value=20, value=8, key="mi_strategy_candidates")
@@ -1499,6 +1682,90 @@ def render_model_improvement_page():
         )
         effective_edgar_queries = combine_edgar_query_inputs(generated_edgar_queries, additional_edgar_queries)
         st.caption(f"Effective EDGAR queries: {effective_edgar_queries or '(none)'}")
+
+        p1, p2 = st.columns(2)
+        with p1:
+            if st.button("Apply Selected Plan To Inputs", use_container_width=True, key="mi_apply_plan_inputs"):
+                if not selected_plan:
+                    st.warning("Select a valid plan first.")
+                else:
+                    plan_objectives = selected_plan.get("strategy_objectives", [])
+                    plan_queries = _flatten_query_sets(selected_plan.get("edgar_query_sets", []))
+                    plan_doc_types = selected_plan.get("document_types_to_improve", [])
+                    if isinstance(plan_objectives, list) and plan_objectives:
+                        st.session_state.mi_strategy_prompt = "\n".join(str(x).strip() for x in plan_objectives if str(x).strip())
+                    if plan_queries:
+                        st.session_state.mi_strategy_generated_queries = combine_edgar_query_inputs(",".join(plan_queries))
+                    if isinstance(plan_doc_types, list) and plan_doc_types:
+                        st.session_state.mi_doc_type_guidance = (
+                            "Prioritize these document families: "
+                            + ", ".join(str(x).strip() for x in plan_doc_types if str(x).strip())
+                        )
+                    st.success("Applied selected plan to strategy/weight inputs.")
+                    st.rerun()
+        with p2:
+            if st.button("Run Agents From Plan (Strategy + Weight)", type="primary", use_container_width=True, key="mi_run_from_plan"):
+                if not selected_plan:
+                    st.warning("Select a valid plan first.")
+                else:
+                    plan_objectives = selected_plan.get("strategy_objectives", [])
+                    plan_queries = _flatten_query_sets(selected_plan.get("edgar_query_sets", []))
+                    plan_doc_types = selected_plan.get("document_types_to_improve", [])
+                    run_prompt = "\n".join(str(x).strip() for x in plan_objectives if str(x).strip()) or base_prompt
+                    run_queries = combine_edgar_query_inputs(",".join(plan_queries), effective_edgar_queries)
+                    run_doc_guidance = (
+                        "Prioritize these document families: "
+                        + ", ".join(str(x).strip() for x in plan_doc_types if str(x).strip())
+                    ) if isinstance(plan_doc_types, list) and plan_doc_types else st.session_state.get("mi_doc_type_guidance", "")
+                    if not run_queries.strip():
+                        st.warning("Plan does not include usable EDGAR queries.")
+                        st.stop()
+
+                    strategy_key = _new_strategy_job_key()
+                    strategy_output_dir = f"artifacts/agent_improvement/{strategy_key}"
+                    strategy_cmd = [
+                        sys.executable,
+                        "-u",
+                        "-m",
+                        "agents.multi_agent_improver",
+                        "--mode",
+                        mode,
+                        "--iterations",
+                        str(int(iterations)),
+                        "--candidates-per-iteration",
+                        str(int(candidates)),
+                        "--edgar-queries",
+                        run_queries,
+                        "--base-system-prompt",
+                        run_prompt,
+                        "--output-dir",
+                        strategy_output_dir,
+                    ]
+                    s_ok, s_msg = start_job(strategy_key, strategy_cmd, env_overrides={"SEC_EDGAR_USER_AGENT": st.session_state.get("sec_user_agent", "")})
+
+                    weight_key = _new_weight_job_key()
+                    weight_cmd = [
+                        sys.executable,
+                        "-u",
+                        "finetune/continuous_weight_improvement.py",
+                        "--edgar-queries",
+                        run_queries,
+                        "--doc-type-guidance",
+                        run_doc_guidance or "Improve legal template fidelity and structured drafting quality.",
+                        "--include-uploads",
+                        "--include-edgar",
+                        "--fallback",
+                    ]
+                    w_ok, w_msg = start_job(weight_key, weight_cmd, env_overrides={"SEC_EDGAR_USER_AGENT": st.session_state.get("sec_user_agent", "")})
+
+                    if s_ok:
+                        st.success(f"Strategy started: {s_msg}")
+                    else:
+                        st.warning(f"Strategy start failed: {s_msg}")
+                    if w_ok:
+                        st.success(f"Weight training started: {w_msg}")
+                    else:
+                        st.warning(f"Weight training start failed: {w_msg}")
 
         strategy_job_keys = list_job_keys("strategy_agents")
         strategy_jobs: list[dict] = []
@@ -1632,14 +1899,18 @@ def render_model_improvement_page():
             key="mi_doc_type_guidance",
         )
 
-        weight_status = get_job_status("weight_training")
-        st.caption(f"Status: {'Running' if weight_status['running'] else 'Stopped'}")
-        if weight_status["pid"]:
-            st.caption(f"PID: {weight_status['pid']}")
+        weight_job_keys = list_job_keys("weight_training")
+        weight_jobs: list[dict] = []
+        for key in weight_job_keys:
+            status = get_job_status(key)
+            weight_jobs.append({"job_key": key, **status})
+        weight_running_count = sum(1 for job in weight_jobs if job.get("running"))
+        st.caption(f"Weight jobs: {len(weight_jobs)} total, {weight_running_count} running")
 
         w1, w2, w3 = st.columns(3)
         with w1:
             if st.button("Start Weight Training", type="primary", use_container_width=True, key="mi_start_weight"):
+                weight_key = _new_weight_job_key()
                 cmd = [
                     sys.executable,
                     "-u",
@@ -1655,24 +1926,51 @@ def render_model_improvement_page():
                     cmd.append("--include-edgar")
                 if use_fallback:
                     cmd.append("--fallback")
-                ok, msg = start_job("weight_training", cmd, env_overrides={"SEC_EDGAR_USER_AGENT": st.session_state.get("sec_user_agent", "")})
+                ok, msg = start_job(weight_key, cmd, env_overrides={"SEC_EDGAR_USER_AGENT": st.session_state.get("sec_user_agent", "")})
                 if ok:
                     st.success(msg)
                 else:
                     st.warning(msg)
         with w2:
-            if st.button("Stop Weight Training", use_container_width=True, key="mi_stop_weight"):
-                ok, msg = stop_job("weight_training")
-                if ok:
-                    st.success(msg)
-                else:
-                    st.warning(msg)
+            if st.button("Stop All Weight Jobs", use_container_width=True, key="mi_stop_weight_all"):
+                running_jobs = [job for job in weight_jobs if job.get("running")]
+                stopped = 0
+                failures = 0
+                for job in running_jobs:
+                    ok, _msg = stop_job(job["job_key"])
+                    if ok:
+                        stopped += 1
+                    else:
+                        failures += 1
+                if stopped:
+                    st.success(f"Stopped {stopped} weight job(s).")
+                if failures:
+                    st.warning(f"Failed to stop {failures} weight job(s).")
+                if not running_jobs:
+                    st.info("No running weight jobs found.")
         with w3:
             if st.button("Refresh Status ", use_container_width=True, key="mi_refresh_weight"):
                 st.rerun()
 
-        weight_log = read_job_log("weight_training", max_lines=120)
-        st.text_area("Weight training log (tail)", value=weight_log, height=260, key="mi_weight_log_area")
+        if weight_jobs:
+            st.markdown("#### Weight job monitor")
+            for idx, job in enumerate(weight_jobs):
+                job_key = job["job_key"]
+                running = bool(job.get("running"))
+                status_label = "Running" if running else "Stopped"
+                started_at = str(job.get("meta", {}).get("started_at") or "unknown")
+                with st.expander(f"{job_key} | {status_label} | started {started_at}", expanded=(idx == 0)):
+                    st.caption(f"PID: {job.get('pid') or '-'}")
+                    if running and st.button("Stop This Weight Job", use_container_width=True, key=f"mi_stop_weight_{job_key}"):
+                        ok, msg = stop_job(job_key)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        st.warning(msg)
+                    weight_log = read_job_log(job_key, max_lines=120)
+                    st.text_area("Weight training log (tail)", value=weight_log, height=220, key=f"mi_weight_log_area_{job_key}")
+        else:
+            st.info("No weight jobs yet. Start a run to see logs here.")
 
 
 # ======================================================================
