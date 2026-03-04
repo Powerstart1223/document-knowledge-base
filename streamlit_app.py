@@ -1606,6 +1606,24 @@ def _new_weight_job_key() -> str:
     return f"weight_training_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}"
 
 
+def _weight_run_env_overrides(use_openai_for_weight: bool) -> dict[str, str]:
+    env = {"SEC_EDGAR_USER_AGENT": st.session_state.get("sec_user_agent", "")}
+    if use_openai_for_weight:
+        api_key = (st.session_state.get("openai_api_key") or "").strip()
+        openai_model = "gpt-4o-mini"
+        if st.session_state.get("llm_provider") == "openai":
+            openai_model = str(st.session_state.get("llm_model") or openai_model)
+        if api_key:
+            env.update(
+                {
+                    "OPENAI_API_KEY": api_key,
+                    "OPENAI_MODEL": openai_model,
+                    "LLM_PROVIDER": "openai",
+                }
+            )
+    return env
+
+
 def render_model_improvement_page():
     """Admin UI to run/monitor model-improvement jobs without Task Scheduler."""
     current_user = st.session_state.current_user
@@ -1661,6 +1679,8 @@ def render_model_improvement_page():
             st.session_state.mi_strategy_edgar_additional_queries = ""
         if "mi_strategy_generated_queries" not in st.session_state:
             st.session_state.mi_strategy_generated_queries = ""
+        if "mi_weight_use_user_openai_key" not in st.session_state:
+            st.session_state.mi_weight_use_user_openai_key = bool((st.session_state.get("openai_api_key") or "").strip())
 
         base_prompt = st.text_area(
             "Original prompt",
@@ -1739,7 +1759,11 @@ def render_model_improvement_page():
                 "--include-edgar",
                 "--fallback",
             ]
-            w_ok, w_msg = start_job(weight_key, weight_cmd, env_overrides={"SEC_EDGAR_USER_AGENT": st.session_state.get("sec_user_agent", "")})
+            w_ok, w_msg = start_job(
+                weight_key,
+                weight_cmd,
+                env_overrides=_weight_run_env_overrides(st.session_state.get("mi_weight_use_user_openai_key", False)),
+            )
 
             if s_ok:
                 st.success(f"Strategy started: {s_msg}")
@@ -1871,6 +1895,13 @@ def render_model_improvement_page():
             "What this does: runs LoRA training and promotion gates. "
             "This can change which local model version is promoted for use."
         )
+        st.checkbox(
+            "Use my OpenAI key from Settings during this weight run",
+            key="mi_weight_use_user_openai_key",
+            help="When enabled, this run injects your per-user OpenAI key/model into the background job environment.",
+        )
+        if st.session_state.get("mi_weight_use_user_openai_key") and not (st.session_state.get("openai_api_key") or "").strip():
+            st.warning("OpenAI key is not set in Settings. Add it or disable this option.")
         include_uploads = st.checkbox("Include uploads corpus", value=True, key="mi_weight_include_uploads")
         include_edgar = st.checkbox("Include EDGAR corpus", value=True, key="mi_weight_include_edgar")
         use_fallback = st.checkbox("Use fallback training settings (lower memory)", value=True, key="mi_weight_fallback")
@@ -1913,7 +1944,11 @@ def render_model_improvement_page():
                     cmd.append("--include-edgar")
                 if use_fallback:
                     cmd.append("--fallback")
-                ok, msg = start_job(weight_key, cmd, env_overrides={"SEC_EDGAR_USER_AGENT": st.session_state.get("sec_user_agent", "")})
+                ok, msg = start_job(
+                    weight_key,
+                    cmd,
+                    env_overrides=_weight_run_env_overrides(st.session_state.get("mi_weight_use_user_openai_key", False)),
+                )
                 if ok:
                     st.success(msg)
                 else:

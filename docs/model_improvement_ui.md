@@ -5,6 +5,7 @@ A built-in admin UI now exists in the Streamlit app for background model improve
 Plain-language difference:
 - `Strategy (No Weight Changes)`: tests and improves instructions/settings. Your model weights stay the same.
 - `Weight Training (Changes Weights)`: runs LoRA training + promotion gate. This can change the promoted local model.
+  - You can enable `Use my OpenAI key from Settings during this weight run` so the background job uses the signed-in user’s key.
 
 Where to open it:
 - Top navigation: `Model Improvement`
