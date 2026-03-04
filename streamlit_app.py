@@ -1422,6 +1422,11 @@ def generate_learning_plan_with_openai(master_prompt: str) -> tuple[dict[str, An
         "document_types_to_improve": ["..."],
         "training_curriculum": ["..."],
         "stop_conditions": ["..."],
+        "acceptance_thresholds": {
+            "min_strategy_score": 0.7,
+            "min_regression_pass_rate": 0.67,
+            "min_consecutive_wins": 2,
+        },
     }
 
     messages = [
@@ -1432,8 +1437,10 @@ def generate_learning_plan_with_openai(master_prompt: str) -> tuple[dict[str, An
                 "You are designing an improvement plan for local legal-model optimization. "
                 "Given the master prompt, return a JSON object exactly with keys:\n"
                 "strategy_objectives, edgar_query_sets, evaluation_rubric, "
-                "document_types_to_improve, training_curriculum, stop_conditions.\n"
+                "document_types_to_improve, training_curriculum, stop_conditions, acceptance_thresholds.\n"
                 "All values must be arrays. `edgar_query_sets` must be array-of-arrays of query strings.\n"
+                "`acceptance_thresholds` must be an object with numeric fields: "
+                "min_strategy_score, min_regression_pass_rate, min_consecutive_wins.\n"
                 f"Example shape: {json.dumps(schema_hint)}\n\n"
                 f"Master prompt:\n{prompt}"
             ),
@@ -1459,6 +1466,20 @@ def generate_learning_plan_with_openai(master_prompt: str) -> tuple[dict[str, An
     ):
         if key not in parsed or not isinstance(parsed[key], list):
             return None, f"Plan missing required array field: {key}"
+
+    thresholds = parsed.get("acceptance_thresholds")
+    if not isinstance(thresholds, dict):
+        return None, "Plan missing required object field: acceptance_thresholds"
+    required_thresholds = ("min_strategy_score", "min_regression_pass_rate", "min_consecutive_wins")
+    for key in required_thresholds:
+        if key not in thresholds:
+            return None, f"acceptance_thresholds missing: {key}"
+    try:
+        float(thresholds["min_strategy_score"])
+        float(thresholds["min_regression_pass_rate"])
+        int(thresholds["min_consecutive_wins"])
+    except Exception:
+        return None, "acceptance_thresholds values must be numeric."
 
     return parsed, "Learning plan generated from OpenAI."
 

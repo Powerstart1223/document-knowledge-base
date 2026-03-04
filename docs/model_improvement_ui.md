@@ -10,6 +10,11 @@ What you can do:
 - Enter an original prompt for model improvement.
 - Generate EDGAR keywords/queries from that prompt using OpenAI.
 - Run local strategy + local weight training directly from the prompt + generated EDGAR queries.
+- Promotion uses a gate with:
+  - fixed regression set: `finetune/regression_eval_set.json`
+  - minimum strategy score threshold
+  - minimum regression pass-rate threshold
+  - minimum consecutive wins (prevents single-win promotion)
 - Start/stop `Strategy Agents` job (prompt/sampling optimization).
   - Multiple strategy jobs can run in parallel.
   - Each job gets its own progress, ETA, and execution log panel.

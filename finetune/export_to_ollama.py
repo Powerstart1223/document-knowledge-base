@@ -4,6 +4,7 @@ Usage:
     python export_to_ollama.py
 """
 
+import argparse
 import subprocess
 import sys
 
@@ -45,6 +46,11 @@ SYSTEM """{system_prompt}"""
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Export a trained adapter to Ollama model")
+    parser.add_argument("--model-name", default=OLLAMA_MODEL_NAME)
+    args = parser.parse_args()
+    model_name = args.model_name
+
     # ------------------------------------------------------------------
     # 1. Verify LoRA adapter exists
     # ------------------------------------------------------------------
@@ -105,10 +111,10 @@ def main():
     # ------------------------------------------------------------------
     # 4. Register with Ollama
     # ------------------------------------------------------------------
-    print(f"\n[3/4] Creating Ollama model '{OLLAMA_MODEL_NAME}'...")
+    print(f"\n[3/4] Creating Ollama model '{model_name}'...")
 
     result = subprocess.run(
-        ["ollama", "create", OLLAMA_MODEL_NAME, "-f", str(MODELFILE_PATH)],
+        ["ollama", "create", model_name, "-f", str(MODELFILE_PATH)],
         capture_output=True, text=True, timeout=300,
     )
 
@@ -122,10 +128,10 @@ def main():
     result = subprocess.run(
         ["ollama", "list"], capture_output=True, text=True, timeout=30,
     )
-    if OLLAMA_MODEL_NAME.split(":")[0] in result.stdout:
-        print(f"  Verified: '{OLLAMA_MODEL_NAME}' appears in ollama list")
+    if model_name.split(":")[0] in result.stdout:
+        print(f"  Verified: '{model_name}' appears in ollama list")
     else:
-        print(f"  WARNING: '{OLLAMA_MODEL_NAME}' not found in ollama list")
+        print(f"  WARNING: '{model_name}' not found in ollama list")
         print(f"  Output: {result.stdout}")
 
     # ------------------------------------------------------------------
@@ -145,7 +151,7 @@ def main():
 
         try:
             result = subprocess.run(
-                ["ollama", "run", OLLAMA_MODEL_NAME, prompt],
+                ["ollama", "run", model_name, prompt],
                 capture_output=True, text=True, timeout=120,
             )
             # Show first 300 chars of response
@@ -159,7 +165,7 @@ def main():
     print("\n" + "=" * 60)
     print("EXPORT COMPLETE")
     print("=" * 60)
-    print(f"  Model registered as: {OLLAMA_MODEL_NAME}")
+    print(f"  Model registered as: {model_name}")
     print("  The model will appear in the Streamlit app Settings dropdown.")
 
 

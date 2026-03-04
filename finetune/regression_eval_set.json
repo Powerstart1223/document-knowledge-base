@@ -1,0 +1,22 @@
+{
+  "cases": [
+    {
+      "id": "nda_confidentiality_clause",
+      "prompt": "Draft a confidentiality clause for a mutual NDA between two corporations.",
+      "required_phrases": ["confidential information", "disclosure", "obligation", "survive"],
+      "min_case_score": 0.5
+    },
+    {
+      "id": "governing_law_clause",
+      "prompt": "Draft a governing law and venue clause for a commercial services agreement.",
+      "required_phrases": ["governing law", "venue", "jurisdiction"],
+      "min_case_score": 0.5
+    },
+    {
+      "id": "indemnification_clause",
+      "prompt": "Draft an indemnification clause allocating third-party claim risk to the vendor.",
+      "required_phrases": ["indemnify", "hold harmless", "third-party claim", "defend"],
+      "min_case_score": 0.5
+    }
+  ]
+}

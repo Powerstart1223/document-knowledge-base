@@ -17,12 +17,23 @@ This pipeline performs real model weight updates (LoRA fine-tuning) and updates 
    - Runs QLoRA fine-tuning (actual weight updates in LoRA adapters).
 
 4. `finetune/export_to_ollama.py`
-   - Exports/quantizes and registers updated model in Ollama.
+   - Exports/quantizes and registers a candidate model in Ollama.
 
-5. `finetune/improve_document_types.py`
+5. `finetune/evaluate_ollama_model.py`
+   - Runs a fixed regression suite from `finetune/regression_eval_set.json`.
+
+6. Promotion gate (inside `continuous_weight_improvement.py`)
+   - Requires:
+     - minimum strategy score threshold (if provided),
+     - minimum regression pass-rate threshold,
+     - minimum consecutive wins (default `2`).
+   - Prevents single-win promotion.
+   - If gate fails, candidate is removed and previous promoted model is kept (automatic rollback behavior).
+
+7. `finetune/improve_document_types.py`
    - Discovers recurring new document types and appends templates to `document_types_generated.json`.
 
-6. `finetune/continuous_weight_improvement.py`
+8. `finetune/continuous_weight_improvement.py`
    - Orchestrates all of the above end-to-end.
 
 ## One command
@@ -56,4 +67,3 @@ Check progress:
 ```powershell
 Get-Content C:\Users\SJK\document-knowledge-base\logs\true_weight_improvement.log -Tail 200
 ```
-
