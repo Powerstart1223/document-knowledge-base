@@ -74,7 +74,7 @@ class User:
 class AuthManager:
     """Manages user authentication and session state."""
 
-    DB_PATH = Path("./users.db")
+    DB_PATH = Path(__file__).resolve().parent / "users.db"
 
     def __init__(self):
         self.allowed_email_domains = self._load_allowed_email_domains()
