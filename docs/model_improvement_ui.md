@@ -10,7 +10,9 @@ What you can do:
 - Start/stop `Strategy Agents` job (prompt/sampling optimization).
 - Start/stop `True Weight Training` job (LoRA fine-tuning + Ollama export).
 - Set preferences directly in the UI:
-  - EDGAR queries (with auto-populate based on the base system prompt)
+  - learning objective / base system prompt
+  - generate EDGAR queries from that prompt using the local model (editable after generation)
+  - additional EDGAR queries appended by the user
   - learning objective/system prompt
   - document-type guidance prompt
   - include uploads / include EDGAR / fallback training mode
