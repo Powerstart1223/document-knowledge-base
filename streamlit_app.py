@@ -1319,6 +1319,18 @@ def derive_edgar_queries_from_prompt(base_prompt: str, max_queries: int = 5) -> 
     return ",".join(deduped[:max_queries])
 
 
+def combine_edgar_query_inputs(*query_sets: str) -> str:
+    seen: set[str] = set()
+    merged: list[str] = []
+    for raw in query_sets:
+        for part in (raw or "").split(","):
+            query = part.strip()
+            if query and query.lower() not in seen:
+                seen.add(query.lower())
+                merged.append(query)
+    return ",".join(merged)
+
+
 def read_strategy_progress(strategy_status: dict) -> dict | None:
     progress_path = PROJECT_ROOT / "artifacts" / "agent_improvement" / "progress.json"
     command = strategy_status.get("meta", {}).get("command", [])
@@ -1352,6 +1364,23 @@ def render_model_improvement_page():
         "Start/stop background jobs for strategy optimization and true weight training.",
         step_note="You can control both jobs from this page and adjust learning preferences.",
     )
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stButton"] button[kind="primary"] {
+            background-color: #0f766e !important;
+            color: #ffffff !important;
+            border: 1px solid #0f766e !important;
+        }
+        div[data-testid="stButton"] button[kind="primary"]:hover {
+            background-color: #0d9488 !important;
+            color: #ffffff !important;
+            border: 1px solid #0d9488 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     strategy_tab, weight_tab = st.tabs(["Strategy Agents", "True Weight Training"])
 
@@ -1370,33 +1399,42 @@ def render_model_improvement_page():
             st.session_state.mi_strategy_edgar_auto_sync = True
         if "mi_strategy_last_prompt_for_queries" not in st.session_state:
             st.session_state.mi_strategy_last_prompt_for_queries = ""
+        if "mi_strategy_edgar_additional_queries" not in st.session_state:
+            st.session_state.mi_strategy_edgar_additional_queries = ""
         base_prompt = st.text_area(
             "Learning objective / base system prompt",
             height=120,
             key="mi_strategy_prompt",
         )
         derived_queries = derive_edgar_queries_from_prompt(base_prompt)
-        if "mi_strategy_edgar_queries" not in st.session_state:
-            st.session_state.mi_strategy_edgar_queries = derived_queries
+        if "mi_strategy_edgar_base_queries" not in st.session_state:
+            legacy_queries = st.session_state.get("mi_strategy_edgar_queries", "")
+            st.session_state.mi_strategy_edgar_base_queries = legacy_queries or derived_queries
 
         if st.session_state.get("mi_strategy_edgar_auto_sync"):
             if st.session_state.get("mi_strategy_last_prompt_for_queries") != base_prompt:
-                st.session_state.mi_strategy_edgar_queries = derived_queries
+                st.session_state.mi_strategy_edgar_base_queries = derived_queries
                 st.session_state.mi_strategy_last_prompt_for_queries = base_prompt
 
         c_prompt_1, c_prompt_2 = st.columns([4, 1])
         with c_prompt_1:
-            edgar_queries = st.text_input(
-                "EDGAR queries (comma-separated)",
-                key="mi_strategy_edgar_queries",
+            base_edgar_queries = st.text_input(
+                "Auto-populated EDGAR queries (from base prompt)",
+                key="mi_strategy_edgar_base_queries",
+            )
+            additional_edgar_queries = st.text_input(
+                "Additional EDGAR queries (optional, comma-separated)",
+                key="mi_strategy_edgar_additional_queries",
             )
         with c_prompt_2:
             st.checkbox("Auto-sync", key="mi_strategy_edgar_auto_sync")
             st.write("")
             if st.button("Auto-populate", use_container_width=True, key="mi_strategy_edgar_autofill"):
-                st.session_state.mi_strategy_edgar_queries = derived_queries
+                st.session_state.mi_strategy_edgar_base_queries = derived_queries
                 st.session_state.mi_strategy_last_prompt_for_queries = base_prompt
                 st.rerun()
+        effective_edgar_queries = combine_edgar_query_inputs(base_edgar_queries, additional_edgar_queries)
+        st.caption(f"Effective EDGAR queries: {effective_edgar_queries or '(none)'}")
 
         strategy_status = get_job_status("strategy_agents")
         st.caption(f"Status: {'Running' if strategy_status['running'] else 'Stopped'}")
@@ -1447,7 +1485,7 @@ def render_model_improvement_page():
                     "--candidates-per-iteration",
                     str(int(candidates)),
                     "--edgar-queries",
-                    edgar_queries,
+                    effective_edgar_queries,
                     "--base-system-prompt",
                     base_prompt,
                 ]
