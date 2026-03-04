@@ -1366,13 +1366,23 @@ def render_model_improvement_page():
         )
         if "mi_strategy_prompt" not in st.session_state:
             st.session_state.mi_strategy_prompt = default_strategy_prompt
+        if "mi_strategy_edgar_auto_sync" not in st.session_state:
+            st.session_state.mi_strategy_edgar_auto_sync = True
+        if "mi_strategy_last_prompt_for_queries" not in st.session_state:
+            st.session_state.mi_strategy_last_prompt_for_queries = ""
         base_prompt = st.text_area(
             "Learning objective / base system prompt",
             height=120,
             key="mi_strategy_prompt",
         )
+        derived_queries = derive_edgar_queries_from_prompt(base_prompt)
         if "mi_strategy_edgar_queries" not in st.session_state:
-            st.session_state.mi_strategy_edgar_queries = derive_edgar_queries_from_prompt(base_prompt)
+            st.session_state.mi_strategy_edgar_queries = derived_queries
+
+        if st.session_state.get("mi_strategy_edgar_auto_sync"):
+            if st.session_state.get("mi_strategy_last_prompt_for_queries") != base_prompt:
+                st.session_state.mi_strategy_edgar_queries = derived_queries
+                st.session_state.mi_strategy_last_prompt_for_queries = base_prompt
 
         c_prompt_1, c_prompt_2 = st.columns([4, 1])
         with c_prompt_1:
@@ -1381,10 +1391,11 @@ def render_model_improvement_page():
                 key="mi_strategy_edgar_queries",
             )
         with c_prompt_2:
-            st.write("")
+            st.checkbox("Auto-sync", key="mi_strategy_edgar_auto_sync")
             st.write("")
             if st.button("Auto-populate", use_container_width=True, key="mi_strategy_edgar_autofill"):
-                st.session_state.mi_strategy_edgar_queries = derive_edgar_queries_from_prompt(base_prompt)
+                st.session_state.mi_strategy_edgar_queries = derived_queries
+                st.session_state.mi_strategy_last_prompt_for_queries = base_prompt
                 st.rerun()
 
         strategy_status = get_job_status("strategy_agents")
