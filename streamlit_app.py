@@ -1619,8 +1619,8 @@ def render_model_improvement_page():
 
     render_workflow_header(
         "Model Improvement",
-        "Start/stop background jobs for strategy optimization and true weight training.",
-        step_note="You can control both jobs from this page and adjust learning preferences.",
+        "Two different job types: Strategy tests (no weight changes) and Weight training (changes model weights).",
+        step_note="Use Strategy to tune prompts/settings. Use Weight Training to actually retrain the local model.",
     )
     st.markdown(
         """
@@ -1640,10 +1640,14 @@ def render_model_improvement_page():
         unsafe_allow_html=True,
     )
 
-    strategy_tab, weight_tab = st.tabs(["Strategy Agents", "True Weight Training"])
+    strategy_tab, weight_tab = st.tabs(["Strategy (No Weight Changes)", "Weight Training (Changes Weights)"])
 
     with strategy_tab:
-        st.markdown("#### Strategy optimization (no weight changes)")
+        st.markdown("#### Strategy: improve behavior without retraining")
+        st.info(
+            "What this does: runs background tests to improve prompts and sampling settings only. "
+            "It does NOT change model weights."
+        )
         st.markdown("##### Prompt -> OpenAI Keywords -> Local Improvement")
         st.caption("Enter your original prompt, generate EDGAR keywords using OpenAI, then run local strategy/weight improvement from those keywords.")
 
@@ -1688,7 +1692,7 @@ def render_model_improvement_page():
         effective_edgar_queries = combine_edgar_query_inputs(generated_edgar_queries, additional_edgar_queries)
         st.caption(f"Effective EDGAR queries: {effective_edgar_queries or '(none)'}")
         if st.button(
-            "Run Local Improvement From Prompt (Strategy + Weight)",
+            "Run Both Jobs (Strategy + Weight Training)",
             type="primary",
             use_container_width=True,
             key="mi_run_local_improvement_from_prompt",
@@ -1757,7 +1761,7 @@ def render_model_improvement_page():
 
         c1, c2, c3 = st.columns(3)
         with c1:
-            if st.button("Start Strategy Job", type="primary", use_container_width=True, key="mi_start_strategy"):
+            if st.button("Start Strategy-Only Job", type="primary", use_container_width=True, key="mi_start_strategy"):
                 if not effective_edgar_queries.strip():
                     st.warning("Generate EDGAR queries first, or enter queries manually before starting.")
                     st.stop()
@@ -1862,7 +1866,11 @@ def render_model_improvement_page():
             st.info("No strategy jobs yet. Start a job to see real-time progress here.")
 
     with weight_tab:
-        st.markdown("#### True weight improvement (LoRA fine-tuning + Ollama export)")
+        st.markdown("#### Weight Training: retrain the local model")
+        st.warning(
+            "What this does: runs LoRA training and promotion gates. "
+            "This can change which local model version is promoted for use."
+        )
         include_uploads = st.checkbox("Include uploads corpus", value=True, key="mi_weight_include_uploads")
         include_edgar = st.checkbox("Include EDGAR corpus", value=True, key="mi_weight_include_edgar")
         use_fallback = st.checkbox("Use fallback training settings (lower memory)", value=True, key="mi_weight_fallback")
@@ -1888,7 +1896,7 @@ def render_model_improvement_page():
 
         w1, w2, w3 = st.columns(3)
         with w1:
-            if st.button("Start Weight Training", type="primary", use_container_width=True, key="mi_start_weight"):
+            if st.button("Start Weight-Training Job", type="primary", use_container_width=True, key="mi_start_weight"):
                 weight_key = _new_weight_job_key()
                 cmd = [
                     sys.executable,
