@@ -852,7 +852,16 @@ def logout(st_session_state):
     st_session_state.current_user = None
     st_session_state.authenticated_at = None
     st_session_state.last_activity_at = None
-    # Clear user-specific data
+    st_session_state.verify_email = False
+    st_session_state.verification_user_id = None
+
+    # Reset navigation state so user lands on login view on rerun.
+    st_session_state.show_settings = False
+    st_session_state.show_knowledge_base = False
+    st_session_state.show_model_improvement = False
+    st_session_state.workflow_mode = None
+
+    # Clear user-specific data.
     if "messages" in st_session_state:
         st_session_state.messages = []
     if "generated_text" in st_session_state:

@@ -63,7 +63,7 @@ from document_scanner import DocumentScanner
 from background_scanner import ScannerManager
 
 # Authentication imports
-from auth import AuthManager, init_session_state, require_auth, get_user_collection_name
+from auth import AuthManager, init_session_state, require_auth, get_user_collection_name, logout
 from auth_ui import (
     render_login_page,
     render_registration_page,

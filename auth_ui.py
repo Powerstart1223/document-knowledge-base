@@ -599,7 +599,7 @@ def render_auth_sidebar(current_user: User):
         </div>
         """, unsafe_allow_html=True)
 
-        if st.button("Sign Out", use_container_width=True):
+        if st.button("Sign Out", use_container_width=True, key="sidebar_sign_out"):
             logout(st.session_state)
             st.rerun()
 
