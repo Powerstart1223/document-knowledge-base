@@ -27,7 +27,7 @@ load_dotenv()
 
 import streamlit as st
 from typing import List
-from datetime import date
+from datetime import date, datetime
 import logging
 
 # Configure logging
@@ -1252,6 +1252,15 @@ def read_job_log(job_key: str, max_lines: int = 120) -> str:
         return ""
 
 
+def list_job_keys(prefix: str) -> list[str]:
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", prefix).lower()
+    discovered: set[str] = set()
+    for ext in ("json", "pid", "log"):
+        for path in CONTROL_DIR.glob(f"{normalized}*.{ext}"):
+            discovered.add(path.stem)
+    return sorted(discovered, reverse=True)
+
+
 def _command_option_value(command: list[str], option_name: str) -> str | None:
     for idx, token in enumerate(command):
         if token == option_name and idx + 1 < len(command):
@@ -1405,6 +1414,10 @@ def read_strategy_progress(strategy_status: dict) -> dict | None:
         return None
 
 
+def _new_strategy_job_key() -> str:
+    return f"strategy_agents_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}"
+
+
 def render_model_improvement_page():
     """Admin UI to run/monitor model-improvement jobs without Task Scheduler."""
     current_user = st.session_state.current_user
@@ -1487,39 +1500,14 @@ def render_model_improvement_page():
         effective_edgar_queries = combine_edgar_query_inputs(generated_edgar_queries, additional_edgar_queries)
         st.caption(f"Effective EDGAR queries: {effective_edgar_queries or '(none)'}")
 
-        strategy_status = get_job_status("strategy_agents")
-        st.caption(f"Status: {'Running' if strategy_status['running'] else 'Stopped'}")
-        if strategy_status["pid"]:
-            st.caption(f"PID: {strategy_status['pid']}")
-        strategy_progress = read_strategy_progress(strategy_status)
-        if strategy_progress:
-            stage = str(strategy_progress.get("stage") or "unknown").replace("_", " ").title()
-            percent = float(strategy_progress.get("percent") or 0.0)
-            eta_seconds = strategy_progress.get("eta_seconds")
-            best_score_value = strategy_progress.get("best_score")
-            progress_message = str(strategy_progress.get("message") or "").strip()
+        strategy_job_keys = list_job_keys("strategy_agents")
+        strategy_jobs: list[dict] = []
+        for key in strategy_job_keys:
+            status = get_job_status(key)
+            strategy_jobs.append({"job_key": key, **status})
 
-            m1, m2, m3 = st.columns(3)
-            with m1:
-                st.metric("Progress", f"{percent:.1f}%")
-            with m2:
-                st.metric("Stage", stage)
-            with m3:
-                st.metric("ETA", _format_duration(eta_seconds))
-
-            st.progress(max(0.0, min(1.0, percent / 100.0)))
-            if progress_message:
-                st.caption(progress_message)
-
-            iteration = strategy_progress.get("iteration")
-            total_iterations = strategy_progress.get("total_iterations")
-            if iteration and total_iterations:
-                st.caption(f"Iteration: {iteration}/{total_iterations}")
-            if best_score_value is not None:
-                st.caption(f"Best score: {float(best_score_value):.4f}")
-            timestamp = strategy_progress.get("timestamp")
-            if timestamp:
-                st.caption(f"Last backend update: {timestamp}")
+        running_count = sum(1 for job in strategy_jobs if job.get("running"))
+        st.caption(f"Strategy jobs: {len(strategy_jobs)} total, {running_count} running")
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -1527,6 +1515,8 @@ def render_model_improvement_page():
                 if not effective_edgar_queries.strip():
                     st.warning("Generate EDGAR queries first, or enter queries manually before starting.")
                     st.stop()
+                job_key = _new_strategy_job_key()
+                output_dir = f"artifacts/agent_improvement/{job_key}"
                 cmd = [
                     sys.executable,
                     "-u",
@@ -1542,25 +1532,88 @@ def render_model_improvement_page():
                     effective_edgar_queries,
                     "--base-system-prompt",
                     base_prompt,
+                    "--output-dir",
+                    output_dir,
                 ]
-                ok, msg = start_job("strategy_agents", cmd, env_overrides={"SEC_EDGAR_USER_AGENT": st.session_state.get("sec_user_agent", "")})
+                ok, msg = start_job(job_key, cmd, env_overrides={"SEC_EDGAR_USER_AGENT": st.session_state.get("sec_user_agent", "")})
                 if ok:
                     st.success(msg)
                 else:
                     st.warning(msg)
         with c2:
-            if st.button("Stop Strategy Job", use_container_width=True, key="mi_stop_strategy"):
-                ok, msg = stop_job("strategy_agents")
-                if ok:
-                    st.success(msg)
-                else:
-                    st.warning(msg)
+            if st.button("Stop All Running Strategy Jobs", use_container_width=True, key="mi_stop_strategy_all"):
+                running_jobs = [job for job in strategy_jobs if job.get("running")]
+                stopped = 0
+                failures = 0
+                for job in running_jobs:
+                    ok, _msg = stop_job(job["job_key"])
+                    if ok:
+                        stopped += 1
+                    else:
+                        failures += 1
+                if stopped:
+                    st.success(f"Stopped {stopped} strategy job(s).")
+                if failures:
+                    st.warning(f"Failed to stop {failures} strategy job(s).")
+                if not running_jobs:
+                    st.info("No running strategy jobs found.")
         with c3:
             if st.button("Refresh Status", use_container_width=True, key="mi_refresh_strategy"):
                 st.rerun()
 
-        strategy_log = read_job_log("strategy_agents", max_lines=120)
-        st.text_area("Strategy execution log (tail)", value=strategy_log, height=240, key="mi_strategy_log_area")
+        if strategy_jobs:
+            st.markdown("#### Strategy job monitor")
+            for idx, job in enumerate(strategy_jobs):
+                job_key = job["job_key"]
+                running = bool(job.get("running"))
+                status_label = "Running" if running else "Stopped"
+                started_at = str(job.get("meta", {}).get("started_at") or "unknown")
+                with st.expander(f"{job_key} | {status_label} | started {started_at}", expanded=(idx == 0)):
+                    st.caption(f"PID: {job.get('pid') or '-'}")
+                    progress = read_strategy_progress(job)
+                    p1, p2, p3 = st.columns(3)
+                    if progress:
+                        stage = str(progress.get("stage") or "unknown").replace("_", " ").title()
+                        percent = float(progress.get("percent") or 0.0)
+                        eta_seconds = progress.get("eta_seconds")
+                        with p1:
+                            st.metric("Progress", f"{percent:.1f}%")
+                        with p2:
+                            st.metric("Stage", stage)
+                        with p3:
+                            st.metric("ETA", _format_duration(eta_seconds))
+                        st.progress(max(0.0, min(1.0, percent / 100.0)))
+                        if progress.get("message"):
+                            st.caption(str(progress["message"]))
+                        if progress.get("iteration") and progress.get("total_iterations"):
+                            st.caption(f"Iteration: {progress['iteration']}/{progress['total_iterations']}")
+                        if progress.get("best_score") is not None:
+                            st.caption(f"Best score: {float(progress['best_score']):.4f}")
+                    else:
+                        with p1:
+                            st.metric("Progress", "0.0%")
+                        with p2:
+                            st.metric("Stage", "Starting")
+                        with p3:
+                            st.metric("ETA", "-")
+                        st.caption("No progress file yet.")
+
+                    if running and st.button("Stop This Job", use_container_width=True, key=f"mi_stop_strategy_{job_key}"):
+                        ok, msg = stop_job(job_key)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        st.warning(msg)
+
+                    strategy_log = read_job_log(job_key, max_lines=80)
+                    st.text_area(
+                        "Execution log (tail)",
+                        value=strategy_log,
+                        height=180,
+                        key=f"mi_strategy_log_area_{job_key}",
+                    )
+        else:
+            st.info("No strategy jobs yet. Start a job to see real-time progress here.")
 
     with weight_tab:
         st.markdown("#### True weight improvement (LoRA fine-tuning + Ollama export)")

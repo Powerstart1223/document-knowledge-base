@@ -8,6 +8,8 @@ Where to open it:
 
 What you can do:
 - Start/stop `Strategy Agents` job (prompt/sampling optimization).
+  - Multiple strategy jobs can run in parallel.
+  - Each job gets its own progress, ETA, and execution log panel.
 - Start/stop `True Weight Training` job (LoRA fine-tuning + Ollama export).
 - Set preferences directly in the UI:
   - learning objective / base system prompt
@@ -16,7 +18,7 @@ What you can do:
   - learning objective/system prompt
   - document-type guidance prompt
   - include uploads / include EDGAR / fallback training mode
-- Monitor live status (running/stopped + PID), strategy progress %, stage, ETA, best score, and tail logs.
+- Monitor live status (running/stopped + PID), per-job strategy progress %, stage, ETA, best score, and per-job tail logs.
 
 Background behavior:
 - Jobs run as detached subprocesses from the app process.
