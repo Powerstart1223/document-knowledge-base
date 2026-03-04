@@ -7,20 +7,18 @@ Where to open it:
 - Sidebar (admin): `Model Improvement`
 
 What you can do:
-- Generate an initial learning plan from a `Master improvement prompt` using OpenAI.
-- Save and select plan artifacts in `artifacts/improvement_plans/`.
-- Apply the selected plan to local strategy/weight inputs.
-- Run both local agent pipelines directly from the selected plan (`Strategy + Weight`).
+- Enter an original prompt for model improvement.
+- Generate EDGAR keywords/queries from that prompt using OpenAI.
+- Run local strategy + local weight training directly from the prompt + generated EDGAR queries.
 - Start/stop `Strategy Agents` job (prompt/sampling optimization).
   - Multiple strategy jobs can run in parallel.
   - Each job gets its own progress, ETA, and execution log panel.
 - Start/stop `True Weight Training` job (LoRA fine-tuning + Ollama export).
   - Multiple weight-training jobs can run in parallel with per-job logs.
 - Set preferences directly in the UI:
-  - learning objective / base system prompt
-  - generate EDGAR queries from that prompt using the local model (editable after generation)
+  - original prompt / base system prompt
+  - generate EDGAR queries from that prompt using OpenAI (editable after generation)
   - additional EDGAR queries appended by the user
-  - learning objective/system prompt
   - document-type guidance prompt
   - include uploads / include EDGAR / fallback training mode
 - Monitor live status (running/stopped + PID), per-job strategy progress %, stage, ETA, best score, and per-job tail logs.
