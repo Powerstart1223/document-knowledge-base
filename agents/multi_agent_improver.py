@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -502,6 +503,37 @@ class ImprovementOrchestrator:
 
         self.run_dir = Path(args.output_dir) / datetime.now().strftime("%Y%m%d_%H%M%S")
         self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.progress_file = Path(args.output_dir) / "progress.json"
+
+    def _write_progress(
+        self,
+        stage: str,
+        percent: float,
+        message: str,
+        *,
+        iteration: int | None = None,
+        total_iterations: int | None = None,
+        eta_seconds: float | None = None,
+        docs_count: int | None = None,
+        cases_count: int | None = None,
+        best_score_value: float | None = None,
+    ) -> None:
+        payload = {
+            "timestamp": utc_now(),
+            "stage": stage,
+            "percent": max(0.0, min(100.0, percent)),
+            "message": message,
+            "iteration": iteration,
+            "total_iterations": total_iterations,
+            "eta_seconds": eta_seconds,
+            "docs_count": docs_count,
+            "cases_count": cases_count,
+            "best_score": best_score_value,
+            "run_dir": str(self.run_dir),
+        }
+        self.progress_file.parent.mkdir(parents=True, exist_ok=True)
+        self.progress_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(f"[{stage}] {message}", flush=True)
 
     def ingest(self) -> list[CorpusDoc]:
         upload_agent = UploadIngestionAgent(
@@ -536,8 +568,20 @@ class ImprovementOrchestrator:
         return list(dedup.values())
 
     def run(self) -> dict[str, Any]:
+        run_start = time.time()
+        self._write_progress("starting", 1.0, "Starting strategy optimization workflow.")
+
+        self._write_progress("ingest", 10.0, "Ingesting uploads and EDGAR sources.")
         docs = self.ingest()
+        self._write_progress("case_build", 22.0, f"Building evaluation cases from {len(docs)} docs.", docs_count=len(docs))
         cases = self.case_builder.build_cases(docs=docs, max_cases=self.args.max_cases)
+        self._write_progress(
+            "ready",
+            30.0,
+            f"Prepared {len(docs)} docs and {len(cases)} evaluation cases.",
+            docs_count=len(docs),
+            cases_count=len(cases),
+        )
 
         best = CandidateConfig(
             candidate_id="baseline",
@@ -549,8 +593,20 @@ class ImprovementOrchestrator:
         )
 
         history: list[CandidateScore] = []
+        iteration_durations: list[float] = []
 
         for iteration in range(1, self.args.iterations + 1):
+            iter_start = time.time()
+            self._write_progress(
+                "iteration",
+                30.0 + (iteration - 1) / max(1, self.args.iterations) * 60.0,
+                f"Iteration {iteration}/{self.args.iterations}: generating and scoring candidates.",
+                iteration=iteration,
+                total_iterations=self.args.iterations,
+                docs_count=len(docs),
+                cases_count=len(cases),
+                best_score_value=best_score(history),
+            )
             candidates = [best]
             proposals = self.discussion.propose_candidates(
                 best_candidate=best,
@@ -574,6 +630,22 @@ class ImprovementOrchestrator:
 
             history.extend(eval_results)
             self._write_iteration(iteration, docs, cases, best, eval_results)
+            iter_duration = max(0.01, time.time() - iter_start)
+            iteration_durations.append(iter_duration)
+            remaining = self.args.iterations - iteration
+            avg_iter = sum(iteration_durations) / len(iteration_durations)
+            eta_seconds = remaining * avg_iter
+            self._write_progress(
+                "iteration_complete",
+                30.0 + iteration / max(1, self.args.iterations) * 60.0,
+                f"Completed iteration {iteration}/{self.args.iterations}. Best score: {best_score(history):.4f}",
+                iteration=iteration,
+                total_iterations=self.args.iterations,
+                eta_seconds=eta_seconds,
+                docs_count=len(docs),
+                cases_count=len(cases),
+                best_score_value=best_score(history),
+            )
 
         final = {
             "timestamp": utc_now(),
@@ -590,10 +662,21 @@ class ImprovementOrchestrator:
                 for x in sorted(history, key=lambda y: y.avg_score, reverse=True)[:10]
             ],
             "run_dir": str(self.run_dir),
+            "total_runtime_seconds": time.time() - run_start,
         }
 
         latest_file = Path(self.args.output_dir) / "latest.json"
         latest_file.write_text(json.dumps(final, indent=2), encoding="utf-8")
+        self._write_progress(
+            "completed",
+            100.0,
+            f"Run complete in {final['total_runtime_seconds']:.1f}s. Best score: {final['best_score']:.4f}",
+            iteration=self.args.iterations,
+            total_iterations=self.args.iterations,
+            docs_count=len(docs),
+            cases_count=len(cases),
+            best_score_value=final["best_score"],
+        )
         return final
 
     def _write_iteration(

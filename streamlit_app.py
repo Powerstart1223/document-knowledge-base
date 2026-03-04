@@ -1252,6 +1252,90 @@ def read_job_log(job_key: str, max_lines: int = 120) -> str:
         return ""
 
 
+def _command_option_value(command: list[str], option_name: str) -> str | None:
+    for idx, token in enumerate(command):
+        if token == option_name and idx + 1 < len(command):
+            return command[idx + 1]
+    return None
+
+
+def _format_duration(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "-"
+    total = int(max(0, float(seconds)))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def _canonical_edgar_queries() -> list[str]:
+    return [
+        "material agreement",
+        "credit agreement",
+        "merger agreement",
+        "employment agreement",
+        "risk factors",
+        "securities offering",
+        "corporate governance",
+        "litigation",
+        "proxy statement",
+        "related party transactions",
+    ]
+
+
+def derive_edgar_queries_from_prompt(base_prompt: str, max_queries: int = 5) -> str:
+    prompt = (base_prompt or "").lower()
+    query_candidates: list[str] = []
+
+    keyword_map = [
+        (("merger", "acquisition", "m&a"), "merger agreement"),
+        (("credit", "loan", "debt", "facility"), "credit agreement"),
+        (("employment", "executive", "compensation"), "employment agreement"),
+        (("risk", "uncertainty"), "risk factors"),
+        (("governance", "board", "director"), "corporate governance"),
+        (("litigation", "dispute", "claim"), "litigation"),
+        (("offering", "security", "capital raise"), "securities offering"),
+        (("proxy", "shareholder vote"), "proxy statement"),
+        (("related party", "affiliate"), "related party transactions"),
+        (("agreement", "contract", "obligation"), "material agreement"),
+    ]
+
+    for keywords, query in keyword_map:
+        if any(k in prompt for k in keywords):
+            query_candidates.append(query)
+
+    if not query_candidates:
+        query_candidates = _canonical_edgar_queries()[:max_queries]
+
+    deduped: list[str] = []
+    for query in query_candidates:
+        if query not in deduped:
+            deduped.append(query)
+
+    return ",".join(deduped[:max_queries])
+
+
+def read_strategy_progress(strategy_status: dict) -> dict | None:
+    progress_path = PROJECT_ROOT / "artifacts" / "agent_improvement" / "progress.json"
+    command = strategy_status.get("meta", {}).get("command", [])
+    if isinstance(command, list):
+        output_dir = _command_option_value(command, "--output-dir")
+        if output_dir:
+            progress_path = PROJECT_ROOT / output_dir / "progress.json"
+
+    if not progress_path.exists():
+        return None
+
+    try:
+        return json.loads(progress_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def render_model_improvement_page():
     """Admin UI to run/monitor model-improvement jobs without Task Scheduler."""
     current_user = st.session_state.current_user
@@ -1276,22 +1360,66 @@ def render_model_improvement_page():
         mode = st.selectbox("Data mode", ["hybrid", "edgar", "uploads"], index=0, key="mi_strategy_mode")
         iterations = st.number_input("Iterations", min_value=1, max_value=50, value=6, key="mi_strategy_iterations")
         candidates = st.number_input("Candidates per iteration", min_value=2, max_value=20, value=8, key="mi_strategy_candidates")
-        edgar_queries = st.text_input(
-            "EDGAR queries (comma-separated)",
-            value="material agreement,credit agreement,merger agreement,risk factors",
-            key="mi_strategy_edgar_queries",
+        default_strategy_prompt = (
+            "You are a legal analysis assistant. Use only provided context, cite concrete facts, "
+            "and do not invent missing information."
         )
+        if "mi_strategy_prompt" not in st.session_state:
+            st.session_state.mi_strategy_prompt = default_strategy_prompt
         base_prompt = st.text_area(
             "Learning objective / base system prompt",
-            value="You are a legal analysis assistant. Use only provided context, cite concrete facts, and do not invent missing information.",
             height=120,
             key="mi_strategy_prompt",
         )
+        if "mi_strategy_edgar_queries" not in st.session_state:
+            st.session_state.mi_strategy_edgar_queries = derive_edgar_queries_from_prompt(base_prompt)
+
+        c_prompt_1, c_prompt_2 = st.columns([4, 1])
+        with c_prompt_1:
+            edgar_queries = st.text_input(
+                "EDGAR queries (comma-separated)",
+                key="mi_strategy_edgar_queries",
+            )
+        with c_prompt_2:
+            st.write("")
+            st.write("")
+            if st.button("Auto-populate", use_container_width=True, key="mi_strategy_edgar_autofill"):
+                st.session_state.mi_strategy_edgar_queries = derive_edgar_queries_from_prompt(base_prompt)
+                st.rerun()
 
         strategy_status = get_job_status("strategy_agents")
         st.caption(f"Status: {'Running' if strategy_status['running'] else 'Stopped'}")
         if strategy_status["pid"]:
             st.caption(f"PID: {strategy_status['pid']}")
+        strategy_progress = read_strategy_progress(strategy_status)
+        if strategy_progress:
+            stage = str(strategy_progress.get("stage") or "unknown").replace("_", " ").title()
+            percent = float(strategy_progress.get("percent") or 0.0)
+            eta_seconds = strategy_progress.get("eta_seconds")
+            best_score_value = strategy_progress.get("best_score")
+            progress_message = str(strategy_progress.get("message") or "").strip()
+
+            m1, m2, m3 = st.columns(3)
+            with m1:
+                st.metric("Progress", f"{percent:.1f}%")
+            with m2:
+                st.metric("Stage", stage)
+            with m3:
+                st.metric("ETA", _format_duration(eta_seconds))
+
+            st.progress(max(0.0, min(1.0, percent / 100.0)))
+            if progress_message:
+                st.caption(progress_message)
+
+            iteration = strategy_progress.get("iteration")
+            total_iterations = strategy_progress.get("total_iterations")
+            if iteration and total_iterations:
+                st.caption(f"Iteration: {iteration}/{total_iterations}")
+            if best_score_value is not None:
+                st.caption(f"Best score: {float(best_score_value):.4f}")
+            timestamp = strategy_progress.get("timestamp")
+            if timestamp:
+                st.caption(f"Last backend update: {timestamp}")
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -1329,7 +1457,7 @@ def render_model_improvement_page():
                 st.rerun()
 
         strategy_log = read_job_log("strategy_agents", max_lines=120)
-        st.text_area("Strategy log (tail)", value=strategy_log, height=240, key="mi_strategy_log_area")
+        st.text_area("Strategy execution log (tail)", value=strategy_log, height=240, key="mi_strategy_log_area")
 
     with weight_tab:
         st.markdown("#### True weight improvement (LoRA fine-tuning + Ollama export)")
