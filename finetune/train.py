@@ -1,4 +1,4 @@
-"""QLoRA fine-tuning of Llama 3.1 8B on legal documents using Unsloth.
+﻿"""QLoRA fine-tuning of Llama 3.1 8B on legal documents using Unsloth.
 
 Usage:
     python train.py              # Normal training
@@ -34,6 +34,19 @@ from config import (
     WEIGHT_DECAY,
 )
 
+LOW_VRAM_FALLBACK_THRESHOLD_GB = 14.0
+
+
+def _detect_gpu_memory_gb() -> tuple[float | None, str | None]:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            props = torch.cuda.get_device_properties(0)
+            return props.total_memory / 1024**3, props.name
+    except Exception:
+        pass
+    return None, None
+
 
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune Llama 3.1 8B on legal docs")
@@ -43,12 +56,30 @@ def main():
     )
     args = parser.parse_args()
 
-    # Resolve settings
-    lora_rank = FALLBACK_LORA_RANK if args.fallback else LORA_RANK
-    max_seq_len = FALLBACK_MAX_SEQ_LENGTH if args.fallback else MAX_SEQ_LENGTH
+    gpu_memory_gb, gpu_name = _detect_gpu_memory_gb()
+    auto_fallback = False
+    auto_fallback_reason = ""
+    if gpu_memory_gb is None:
+        auto_fallback = True
+        auto_fallback_reason = "No CUDA GPU detected; using safer fallback settings."
+    elif gpu_memory_gb < LOW_VRAM_FALLBACK_THRESHOLD_GB:
+        auto_fallback = True
+        auto_fallback_reason = (
+            f"Detected GPU memory {gpu_memory_gb:.1f} GB on {gpu_name}; "
+            f"using fallback settings below {LOW_VRAM_FALLBACK_THRESHOLD_GB:.0f} GB."
+        )
+
+    use_fallback = bool(args.fallback or auto_fallback)
+    lora_rank = FALLBACK_LORA_RANK if use_fallback else LORA_RANK
+    max_seq_len = FALLBACK_MAX_SEQ_LENGTH if use_fallback else MAX_SEQ_LENGTH
 
     if args.fallback:
-        print("[INFO] Using fallback settings: r=8, max_seq_length=1024")
+        print("[INFO] Using fallback settings because --fallback was requested.")
+    elif auto_fallback_reason:
+        print(f"[INFO] {auto_fallback_reason}")
+
+    if gpu_name and gpu_memory_gb is not None:
+        print(f"[INFO] GPU detected: {gpu_name} ({gpu_memory_gb:.1f} GB)")
 
     # ------------------------------------------------------------------
     # Verify training data exists
@@ -58,8 +89,10 @@ def main():
         print("Run prepare_data.py first.")
         sys.exit(1)
 
-    line_count = sum(1 for _ in open(TRAINING_DATA_FILE, encoding="utf-8"))
+    with open(TRAINING_DATA_FILE, encoding="utf-8") as handle:
+        line_count = sum(1 for _ in handle)
     print(f"Training data: {line_count} examples from {TRAINING_DATA_FILE}")
+    print(f"[INFO] Training settings: lora_rank={lora_rank}, max_seq_length={max_seq_len}, batch_size={PER_DEVICE_BATCH_SIZE}, grad_accum={GRADIENT_ACCUMULATION_STEPS}")
 
     # ------------------------------------------------------------------
     # Load model with Unsloth (4-bit quantized)
@@ -70,7 +103,7 @@ def main():
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=BASE_MODEL,
         max_seq_length=max_seq_len,
-        dtype=None,  # Auto-detect
+        dtype=None,
         load_in_4bit=True,
     )
 
@@ -85,11 +118,10 @@ def main():
         lora_dropout=LORA_DROPOUT,
         target_modules=LORA_TARGET_MODULES,
         bias="none",
-        use_gradient_checkpointing="unsloth",  # Smart offload to RAM
+        use_gradient_checkpointing="unsloth",
         random_state=SEED,
     )
 
-    # Print trainable parameter count
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     print(f"  Trainable parameters: {trainable:,} / {total:,} ({100 * trainable / total:.2f}%)")
@@ -155,18 +187,8 @@ def main():
         ),
     )
 
-    gpu_stats = None
-    try:
-        import torch
-        if torch.cuda.is_available():
-            gpu_stats = torch.cuda.get_device_properties(0)
-            print(f"  GPU: {gpu_stats.name} ({gpu_stats.total_mem / 1024**3:.1f} GB)")
-    except Exception:
-        pass
-
     train_result = trainer.train()
 
-    # Print results
     print("\n" + "=" * 60)
     print("TRAINING COMPLETE")
     print("=" * 60)
@@ -174,9 +196,6 @@ def main():
     print(f"  Training steps: {train_result.global_step}")
     print(f"  Training samples: {train_result.metrics.get('train_samples', 'N/A')}")
 
-    # ------------------------------------------------------------------
-    # Save LoRA adapter
-    # ------------------------------------------------------------------
     LORA_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(str(LORA_OUTPUT_DIR))
     tokenizer.save_pretrained(str(LORA_OUTPUT_DIR))
